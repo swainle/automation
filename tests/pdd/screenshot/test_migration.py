@@ -1,12 +1,11 @@
 import sqlite3
-from pathlib import Path
+from importlib.resources import files
 
 import pytest
 
 from automation.pdd.screenshot.state import StateStore
-from automation.pdd.screenshot.config import runtime_root
 
-SQL = runtime_root(Path(__file__).resolve().parents[3]) / 'migrate/20261031134259_merge_daily_shops.sql'
+SQL = files('automation.pdd.screenshot').joinpath('migrate/20261031134259_merge_daily_shops.sql')
 
 
 def test_migration_preserves_tasks_amounts_and_orphan_images(tmp_path):
@@ -43,7 +42,7 @@ def test_migration_preserves_tasks_amounts_and_orphan_images(tmp_path):
         assert store.get('2026-10-31', '孤立图片')['amount'] == '0.00'
         assert len(store.receivables('2026-10-31')) == 2
         store.finish('2026-10-31', '验证', 'verification_required', 'verification_required')
-        split = SQL.with_name('20261031134959_split_verification_status.sql').read_text(encoding='utf-8')
+        split = files('automation.pdd.screenshot').joinpath('migrate/20261031134959_split_verification_status.sql').read_text(encoding='utf-8')
         store.db.executescript(split)
         store.db.executescript(split)  # 重复执行安全
         assert store.get('2026-10-31', '验证')['status'] == 'verification_other'

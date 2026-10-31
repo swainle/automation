@@ -44,7 +44,7 @@ CS_SSH_COMMAND=
 
 def initialize(project_root=None):
     root = runtime_root(project_root)
-    for directory in ("data/cookies/Cookie", "logs", "state", "migrate"):
+    for directory in ("data/cookies/Cookie", "logs", "state"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     path = root / ".env"
     try:

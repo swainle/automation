@@ -100,6 +100,7 @@ def test_init_cli_without_env_does_not_start_workflow(tmp_path, monkeypatch):
     assert values["COOKIES_DIR"] == "./data/cookies/Cookie"
     assert values["SHADOWBOT_CLI_DIR"] == "C:/Program Files/ShadowBot"
     assert not (business / "state/sqlite.db").exists()
+    assert not (business / "migrate").exists()
     with patch.dict(os.environ, {}, clear=True):
         assert Config.load().root == business
 

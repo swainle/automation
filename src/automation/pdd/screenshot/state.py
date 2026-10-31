@@ -59,7 +59,7 @@ class StateStore:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(daily_shops)")}
         if "step" in columns:
             self.db.close()
-            raise ValueError("数据库需要迁移：请先备份并执行业务工作目录下的 migrate/20261031134259_merge_daily_shops.sql")
+            raise ValueError(f"数据库需要迁移：请先备份并执行 {Path(__file__).parent / 'migrate/20261031134259_merge_daily_shops.sql'}")
         self.db.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS daily_shops (
