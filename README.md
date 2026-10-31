@@ -38,7 +38,7 @@ uv run python -m automation.pdd.screenshot.export
 # 仅同步运行影刀报表
 uv run python -m automation.pdd.screenshot.report
 # 独立启动 Cookie 服务，读取相邻业务目录 .env
-uv run python -m automation.pdd.screenshot.cookeis_server
+uv run python -m automation.pdd.screenshot.cookies
 ```
 
 完整流程和爬取入口默认常驻、北京时间跨日重启，均支持 `--once`、`--skip-sms-shop`。完整流程启动前检查影刀路径，每天正常爬取结束后导出，成功后调用影刀应用 `f00b7263-9e1b-4e17-af4c-cc35676fc44d`。影刀使用 CLI 默认同步模式等待结束（默认最长 10 分钟）；失败退出并保留本地结果。爬取异常或验证上限退出时，本地状态仍保存，可单独导出；不会启动影刀。单独爬取、导出不要求影刀配置。
@@ -54,7 +54,7 @@ uv run python -m automation.pdd.screenshot
 截图功能仅使用独立模块入口，统一 CLI 不再提供 `pdd.screenshot` 子命令。可运行 `uv run python -m automation.pdd.screenshot --skip-sms-shop`，跳过当天已有 `sms_required` 记录的店铺；不加参数则重新处理。首次遇到短信验证仍保存状态并继续下一家，其他验证及连续第 6 家退出规则保持不变。
 运行 `uv run python -m automation.pdd.screenshot.export` 从业务 `state/sqlite.db` 只读查询北京时间当天全部店铺记录，以来源表拼多多店铺为白名单并按原表顺序，使用数据库金额、状态、图片路径重新生成 `data/日期/店铺应收截图.xlsx`，不参考旧输出表格，不启动浏览器、CS、WS，不读取飞书。管理人员仅从 `data/店铺应收截图.xlsx` 的“店铺名称”“店铺管理人员”列匹配；匹配忽略 `【拼多多】` 前缀和首尾空格，原表外店铺及天猫不输出，原表内当天无记录保留行并注明当天无数据，同店铺重复或人员冲突时报错。输出店铺名统一为 `【拼多多】店铺名`。WPS 图片使用 `cellimages.xml` 和 `DISPIMG`，数据行高 26 磅，A～F 列宽统一为 20，文字不自动换行；标题行和表头行分别为 24、42 磅。关闭 WPS 中已打开的目标文件后再运行；重建成功后旧文件归档为 `.n.xlsx`，原名保存最新结果。人员来源表、数据库或当天记录缺失时报错，保留旧输出。
 验证状态分为 `slider_required`（滑块）、`sms_required`（短信/手机验证码）、`verification_other`（其他身份验证）。本轮不重试并继续下一家；当天重新运行跳过 `success`、`login_error`，重新处理这三类验证状态并更新当天原记录。连续计数从 0 开始，三类合计连续第 6 家时退出；报表分别显示“需要滑块验证”“需要短信验证”“需要其他身份验证”。同时出现滑块和短信提示时，优先记录滑块验证。
-旧 `verification_required` 记录执行 `migrate/20261031134959_split_verification_status.sql` 归为 `verification_other`，保留原异常原因；旧三表数据库先执行合表迁移，再执行此脚本。迁移前停止程序并备份数据库，插件需重新加载。
+旧 `verification_required` 记录执行 `../automation.pdd.screenshot/migrate/20261031134959_split_verification_status.sql` 归为 `verification_other`，保留原异常原因；旧三表数据库先执行合表迁移，再执行此脚本。迁移前停止程序并备份数据库，插件需重新加载。
 进入后台并核对店铺后，会先关闭通知弹窗、点击“查看金额”，等金额显示后再截图。
 通知清理支持“今日平台已支持您以下申诉，打款成功…”弹窗，通过内容及弹窗内关闭按钮定位，不依赖 `/html/body/div[5]` 顺序；关闭后复查弹窗已消失。
 同样支持标题为“请选择您的主要发货地”的弹窗，仅点击关闭按钮，不选择或提交发货地；关闭按钮不唯一时停止该动作，避免误点。
@@ -66,7 +66,7 @@ uv run python -m automation.pdd.screenshot
 店铺名称保留飞书原文（含 `【拼多多】` 前缀），后台身份核对及 Cookie 文件查找去掉此前缀；管理人员读取飞书的 `店铺管理人员` 列。
 SQLite 仅使用 `daily_shops`，保存日期、店铺名、飞书行号、管理人员、处理状态、异常原因、尝试次数、清理结果、金额、图片路径和更新时间。过程步骤及事件写日志。
 连续实际处理的第 6 家店铺需要验证码时，先保存状态并清理，再退出程序；需要报表时单独运行 export；跳过的店铺不参与计数，其他处理结果归零。每个日期轮次重新计数。
-旧三表数据库需先停止程序、备份数据库，再执行 `migrate/20261031134259_merge_daily_shops.sql`（仅执行一次，适用于包含 `manager`、`row_number` 的上一版结构）；程序会提示迁移，不自动删除旧表。迁移保留任务及金额图片记录，旧事件明细仅保留在备份中。
+旧三表数据库需先停止程序、备份数据库，再执行 `../automation.pdd.screenshot/migrate/20261031134259_merge_daily_shops.sql`（仅执行一次，适用于包含 `manager`、`row_number` 的上一版结构）；程序会提示迁移，不自动删除旧表。迁移保留任务及金额图片记录，旧事件明细仅保留在备份中。
 `daily_shops.row_number` 保存飞书原始行号；每次读取店铺列表后更新当天记录，包括已完成并跳过的店铺。旧库自动补列，未重新读取的历史记录保持 NULL。
 WS 端口统一使用 `AUTOMATION_WS_PORT`，其他现有配置名继续保留，见 `--init` 生成的业务 `.env`。
 完整工作流自行管理 CS、WS 与 Chrome，启动前先停止单独运行的 CS、WS；启动时会关闭现有 Chrome 并准备配置。
@@ -558,16 +558,16 @@ SSH 用户名、密码、端口分别通过 `CS_SSH_USER`、`CS_SSH_PASSWORD`、
 
 业务步骤之间默认等待 0.5 秒，Cookie 导入后到打开工作台前等待 1 秒。自动化导航不等待整页加载完成，跳转后最多等待 10 秒，出现账号登录按钮、店铺名或后台待收货数据区域即继续；超时重试当前店铺。提交登录后等待 0.5 秒再轮询结果，使用统一截止时间，默认最多 30 秒。导航动作异常记为可重试的 business_failed，不直接计为当天登录完成。新版等待逻辑需要重新加载 0.11.1 插件并重启 automation。
 
-截图业务专用 Cookie 服务入口 `automation.pdd.screenshot.cookeis_server`（名称按命令中的拼写）从代码项目目录运行，读取 `../automation.pdd.screenshot/.env`，Cookie 相对路径以业务目录为基准。普通启动独立运行；加 `--remote` 接收 SSH stdin 心跳与 stop，在断线或心跳超时后清理子进程。旧 `automation.pdd.screenshot.remote --root ...` 仍兼容。远程模式端口取自服务器业务 `.env` 的 `COOKIES_SERVER_PORT`，需与本机 `CS_SSH_REMOTE_PORT` 一致。
+截图业务专用 Cookie 服务入口 `automation.pdd.screenshot.cookies`从代码项目目录运行，读取 `../automation.pdd.screenshot/.env`，Cookie 相对路径以业务目录为基准。普通启动独立运行；加 `--remote` 接收 SSH stdin 心跳与 stop，在断线或心跳超时后清理子进程。旧 `automation.pdd.screenshot.remote --root ...` 仍兼容。远程模式端口取自服务器业务 `.env` 的 `COOKIES_SERVER_PORT`，需与本机 `CS_SSH_REMOTE_PORT` 一致。
 
 Windows CMD 的远程启动示例（服务器代码需同步更新）：
 
 ```dotenv
-CS_SSH_COMMAND='cd /d C:\Users\administrator\Desktop\RPA\automation && uv run python -u -m automation.pdd.screenshot.cookeis_server --remote'
+CS_SSH_COMMAND='cd /d C:\Users\administrator\Desktop\RPA\automation && uv run python -u -m automation.pdd.screenshot.cookies --remote'
 ```
 
 若服务器 SSH 默认 Shell 是 Windows PowerShell，则使用 `Set-Location`，并检查目录切换成功：
 
 ```dotenv
-CS_SSH_COMMAND='Set-Location -LiteralPath "C:\Users\administrator\Desktop\RPA\automation" -ErrorAction Stop; uv run python -u -m automation.pdd.screenshot.cookeis_server --remote'
+CS_SSH_COMMAND='Set-Location -LiteralPath "C:\Users\administrator\Desktop\RPA\automation" -ErrorAction Stop; uv run python -u -m automation.pdd.screenshot.cookies --remote'
 ```

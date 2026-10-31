@@ -121,14 +121,14 @@ def test_init_preserves_existing_configuration_and_data(tmp_path):
 
 
 def test_business_cookie_server_uses_business_config(tmp_path, monkeypatch):
-    from automation.pdd.screenshot.cookeis_server import main
+    from automation.pdd.screenshot.cookies import main
     project = tmp_path / "project"
     project.mkdir()
     business = runtime_root(project)
     business.mkdir()
     (business / ".env").write_text("COOKIES_DIR=inputs/cookies\nCOOKIES_SERVER_PORT=9876\n", encoding="utf-8")
     monkeypatch.chdir(project)
-    monkeypatch.setattr("sys.argv", ["cookeis_server"])
+    monkeypatch.setattr("sys.argv", ["cookies"])
     app = Mock()
     with patch.dict(os.environ, {}, clear=True), patch(
         "automation.com.cookies_server.app.create_app", return_value=app
@@ -139,12 +139,12 @@ def test_business_cookie_server_uses_business_config(tmp_path, monkeypatch):
 
 
 def test_business_cookie_server_missing_config_does_not_start(tmp_path, monkeypatch):
-    from automation.pdd.screenshot.cookeis_server import main
+    from automation.pdd.screenshot.cookies import main
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.chdir(project)
-    monkeypatch.setattr("sys.argv", ["cookeis_server"])
-    with patch("automation.pdd.screenshot.cookeis_server.serve") as serve:
+    monkeypatch.setattr("sys.argv", ["cookies"])
+    with patch("automation.pdd.screenshot.cookies.serve") as serve:
         assert main() == 1
         serve.assert_not_called()
 
@@ -169,17 +169,17 @@ def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatc
 
 
 def test_business_cookie_remote_mode_uses_supervisor(tmp_path, monkeypatch):
-    from automation.pdd.screenshot.cookeis_server import main
+    from automation.pdd.screenshot.cookies import main
     project = tmp_path / "project"
     project.mkdir()
     business = runtime_root(project)
     business.mkdir()
     (business / ".env").write_text("COOKIES_SERVER_PORT=9876\n", encoding="utf-8")
     monkeypatch.chdir(project)
-    monkeypatch.setattr("sys.argv", ["cookeis_server", "--remote", "--lease", "40"])
+    monkeypatch.setattr("sys.argv", ["cookies", "--remote", "--lease", "40"])
     with patch.dict(os.environ, {}, clear=True), patch(
         "automation.pdd.screenshot.remote.run_server", return_value=0
-    ) as supervisor, patch("automation.pdd.screenshot.cookeis_server.serve") as serve:
+    ) as supervisor, patch("automation.pdd.screenshot.cookies.serve") as serve:
         assert main() == 0
         supervisor.assert_called_once_with(business, port=9876, lease=40)
         serve.assert_not_called()

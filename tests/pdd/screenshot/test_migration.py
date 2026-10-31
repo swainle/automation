@@ -4,8 +4,9 @@ from pathlib import Path
 import pytest
 
 from automation.pdd.screenshot.state import StateStore
+from automation.pdd.screenshot.config import runtime_root
 
-SQL = Path(__file__).resolve().parents[3] / 'migrate/20261031134259_merge_daily_shops.sql'
+SQL = runtime_root(Path(__file__).resolve().parents[3]) / 'migrate/20261031134259_merge_daily_shops.sql'
 
 
 def test_migration_preserves_tasks_amounts_and_orphan_images(tmp_path):
