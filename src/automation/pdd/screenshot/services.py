@@ -109,7 +109,10 @@ class Services:
             options["client_keys"] = [os.path.expanduser(cfg.ssh_key)]
         # 保留 AsyncSSH 默认 known_hosts 检查，不自动信任未知主机。
         log("管理", "正在建立远程 CS 的 SSH 连接")
-        self.conn = await asyncssh.connect(cfg.ssh_host, **options)
+        try:
+            self.conn = await asyncssh.connect(cfg.ssh_host, **options)
+        except socket.gaierror:
+            raise StartupError("SSH 主机名无法解析，请检查业务 .env 中的 CS_SSH_HOST（只填 IP 或主机名）") from None
         self.remote = await asyncio.wait_for(self.conn.create_process(cfg.ssh_command, encoding="utf-8"), 15)
         async def output(reader):
             while line := await reader.readline():
@@ -119,8 +122,9 @@ class Services:
                 self.remote.stdin.write('{"type":"ping"}\n')
                 await self.remote.stdin.drain()
                 await asyncio.sleep(5)
-        self.tasks = [asyncio.create_task(output(self.remote.stdout)),
-                      asyncio.create_task(output(self.remote.stderr)), asyncio.create_task(heartbeat())]
+        self.tasks = [asyncio.create_task(output(self.remote.stdout), name="ssh_stdout"),
+                      asyncio.create_task(output(self.remote.stderr), name="ssh_stderr"),
+                      asyncio.create_task(heartbeat(), name="ssh_heartbeat")]
         self.tunnel = await self.conn.forward_local_port("127.0.0.1", 0, "127.0.0.1", cfg.ssh_cs_port)
         self.cs_base = f"http://127.0.0.1:{self.tunnel.get_port()}"
 
@@ -130,11 +134,12 @@ class Services:
         if self.browser is not None and self.browser.poll() not in (None, 0):
             raise InfrastructureError("browser_exited")
         if self.remote is not None and self.remote.exit_status is not None:
-            raise InfrastructureError("remote_cs_exited")
+            raise InfrastructureError(f"remote_cs_exited（远程进程退出，exit_status={self.remote.exit_status}；检查 CS 日志与 CS_SSH_COMMAND）")
         if self.conn is not None and self.conn.is_closed():
             raise InfrastructureError("ssh_disconnected")
-        if any(task.done() and not task.cancelled() and task.exception() for task in self.tasks):
-            raise InfrastructureError("ssh_stream_failed")
+        for task in self.tasks:
+            if task.done() and not task.cancelled() and (error := task.exception()):
+                raise InfrastructureError(f"ssh_stream_failed（{task.get_name()}，{type(error).__name__}）")
 
     async def wait_ready(self, probe, description):
         deadline = asyncio.get_running_loop().time() + self.config.ready_timeout

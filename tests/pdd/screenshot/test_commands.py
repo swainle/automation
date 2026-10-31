@@ -147,3 +147,66 @@ def test_business_cookie_server_missing_config_does_not_start(tmp_path, monkeypa
     with patch("automation.pdd.screenshot.cookeis_server.serve") as serve:
         assert main() == 1
         serve.assert_not_called()
+
+
+def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatch, capsys):
+    import importlib
+    from automation.pdd.screenshot import main
+    from automation.pdd.screenshot.services import InfrastructureError
+    importlib.import_module("automation.pdd.screenshot.report")
+    monkeypatch.setattr("sys.argv", ["screenshot"])
+    cfg = Config(root=tmp_path)
+    def fail(coroutine):
+        coroutine.close()
+        raise InfrastructureError("remote_cs_exited")
+    with patch("automation.pdd.screenshot.Config.load", return_value=cfg), patch(
+        "automation.pdd.screenshot.report.cli_path", return_value=Path("fixture.exe")
+    ), patch("automation.pdd.screenshot.configure"), patch(
+        "automation.pdd.screenshot.run_interruptible", side_effect=fail
+    ):
+        assert main() == 1
+    assert "remote_cs_exited" in capsys.readouterr().out
+
+
+def test_business_cookie_remote_mode_uses_supervisor(tmp_path, monkeypatch):
+    from automation.pdd.screenshot.cookeis_server import main
+    project = tmp_path / "project"
+    project.mkdir()
+    business = runtime_root(project)
+    business.mkdir()
+    (business / ".env").write_text("COOKIES_SERVER_PORT=9876\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("sys.argv", ["cookeis_server", "--remote", "--lease", "40"])
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "automation.pdd.screenshot.remote.run_server", return_value=0
+    ) as supervisor, patch("automation.pdd.screenshot.cookeis_server.serve") as serve:
+        assert main() == 0
+        supervisor.assert_called_once_with(business, port=9876, lease=40)
+        serve.assert_not_called()
+
+
+def test_ssh_resolution_failure_has_configuration_hint(tmp_path):
+    import socket
+    from automation.pdd.screenshot.services import Services, StartupError
+    service = Services(Config(root=tmp_path, ssh_host="invalid.fixture", ssh_command="fixture"))
+    with patch("asyncssh.connect", new=AsyncMock(side_effect=socket.gaierror(11001, "fixture"))):
+        with pytest.raises(StartupError, match="CS_SSH_HOST"):
+            asyncio.run(service._remote_start())
+
+
+def test_remote_exit_and_stream_failure_have_specific_details(tmp_path):
+    from automation.pdd.screenshot.services import Services, InfrastructureError
+    service = Services(Config(root=tmp_path))
+    service.remote = Mock(exit_status=2)
+    with pytest.raises(InfrastructureError, match="exit_status=2"):
+        service.check_processes()
+    service.remote = None
+    async def scenario():
+        async def fail():
+            raise BrokenPipeError("fixture")
+        task = asyncio.create_task(fail(), name="ssh_heartbeat")
+        await asyncio.gather(task, return_exceptions=True)
+        service.tasks = [task]
+        with pytest.raises(InfrastructureError, match="ssh_heartbeat，BrokenPipeError"):
+            service.check_processes()
+    asyncio.run(scenario())

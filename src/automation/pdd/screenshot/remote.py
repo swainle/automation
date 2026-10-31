@@ -59,23 +59,28 @@ def main():
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535 or args.lease <= 5:
         parser.error("端口须为 1024～65535，心跳超时须大于 5 秒")
-    root = args.root.resolve()
-    with RunLock(root / f"data/cs-remote-{args.port}.lock"):
+    return run_server(args.root, port=args.port, lease=args.lease)
+
+
+def run_server(root, *, port=8787, lease=30):
+    """在业务目录内启动 Cookie 子进程，处理 stdin 心跳和 stop。"""
+    root = Path(root).resolve()
+    with RunLock(root / f"state/cs-remote-{port}.lock"):
         # 不连接已有服务，避免把别的 CS 误认为本次启动的 CS。
         with socket.socket() as sock:
             try:
-                sock.bind(("127.0.0.1", args.port))
+                sock.bind(("127.0.0.1", port))
             except OSError:
                 print("远程 CS 端口已占用。", file=sys.stderr)
                 return 1
         from dotenv import dotenv_values
         values = {key: value for key, value in dotenv_values(root / ".env").items() if value is not None}
         env = dict(os.environ, **values)
-        env.update(COOKIES_SERVER_HOST="127.0.0.1", COOKIES_SERVER_PORT=str(args.port), PYTHONIOENCODING="utf-8")
+        env.update(COOKIES_SERVER_HOST="127.0.0.1", COOKIES_SERVER_PORT=str(port), PYTHONIOENCODING="utf-8")
         directory = Path(env.get("COOKIES_DIR") or "data/cookies")
         env["COOKIES_DIR"] = str(directory if directory.is_absolute() else root / directory)
         return supervise([sys.executable, "-u", "-m", "automation.com.cookies_server"],
-                         cwd=root, env=env, lease=args.lease)
+                         cwd=root, env=env, lease=lease)
 
 
 if __name__ == "__main__":

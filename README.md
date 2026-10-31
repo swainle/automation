@@ -558,4 +558,16 @@ SSH 用户名、密码、端口分别通过 `CS_SSH_USER`、`CS_SSH_PASSWORD`、
 
 业务步骤之间默认等待 0.5 秒，Cookie 导入后到打开工作台前等待 1 秒。自动化导航不等待整页加载完成，跳转后最多等待 10 秒，出现账号登录按钮、店铺名或后台待收货数据区域即继续；超时重试当前店铺。提交登录后等待 0.5 秒再轮询结果，使用统一截止时间，默认最多 30 秒。导航动作异常记为可重试的 business_failed，不直接计为当天登录完成。新版等待逻辑需要重新加载 0.11.1 插件并重启 automation。
 
-截图业务专用 Cookie 服务入口 `automation.pdd.screenshot.cookeis_server`（名称按命令中的拼写）从代码项目目录运行，读取 `../automation.pdd.screenshot/.env`，Cookie 相对路径以业务目录为基准。它独立运行服务，不管理 SSH 心跳；现有 SSH 自动管理模式仍使用 `automation.pdd.screenshot.remote`。
+截图业务专用 Cookie 服务入口 `automation.pdd.screenshot.cookeis_server`（名称按命令中的拼写）从代码项目目录运行，读取 `../automation.pdd.screenshot/.env`，Cookie 相对路径以业务目录为基准。普通启动独立运行；加 `--remote` 接收 SSH stdin 心跳与 stop，在断线或心跳超时后清理子进程。旧 `automation.pdd.screenshot.remote --root ...` 仍兼容。远程模式端口取自服务器业务 `.env` 的 `COOKIES_SERVER_PORT`，需与本机 `CS_SSH_REMOTE_PORT` 一致。
+
+Windows CMD 的远程启动示例（服务器代码需同步更新）：
+
+```dotenv
+CS_SSH_COMMAND='cd /d C:\Users\administrator\Desktop\RPA\automation && uv run python -u -m automation.pdd.screenshot.cookeis_server --remote'
+```
+
+若服务器 SSH 默认 Shell 是 Windows PowerShell，则使用 `Set-Location`，并检查目录切换成功：
+
+```dotenv
+CS_SSH_COMMAND='Set-Location -LiteralPath "C:\Users\administrator\Desktop\RPA\automation" -ErrorAction Stop; uv run python -u -m automation.pdd.screenshot.cookeis_server --remote'
+```

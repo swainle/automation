@@ -5,7 +5,7 @@ import signal
 from automation.config import env_bool
 
 from automation.pdd.screenshot.blocking import blocking
-from automation.pdd.screenshot.logs import configure, close as close_logs, log, report
+from automation.pdd.screenshot.logs import configure, close as close_logs, log, report as report_message
 from automation.pdd.screenshot.config import Config
 from automation.pdd.screenshot.runner import CleanupFatal, DayChanged, ShopRunner, VerificationLimit, load_shops
 from automation.pdd.screenshot.services import InfrastructureError, Services, StartupError
@@ -84,11 +84,12 @@ async def run(config, store, *, once=False, skip_sms_shop=False, report_cli=None
             import asyncssh
             if not isinstance(error, (InfrastructureError, OSError, asyncssh.Error)):
                 raise
+            reason = str(error) if isinstance(error, InfrastructureError) else type(error).__name__
             restarts += 1
-            store.event(today(), None, "infrastructure_restart", {"attempt": restarts, "error": type(error).__name__})
+            store.event(today(), None, "infrastructure_restart", {"attempt": restarts, "error": type(error).__name__, "reason": reason})
             if restarts > config.restart_limit:
-                raise InfrastructureError("infrastructure_restart_limit_reached") from None
-            log("管理", f"服务异常（{type(error).__name__}），准备重启本流程服务（{restarts}/{config.restart_limit}）。")
+                raise InfrastructureError(f"服务重启次数已达上限；最后原因：{reason}") from None
+            log("管理", f"服务异常（{reason}），准备重启本流程服务（{restarts}/{config.restart_limit}）。")
         finally:
             await services.stop()
         await asyncio.sleep(2)
@@ -140,14 +141,14 @@ def main(*, crawl_only=False):
             run_interruptible(run(config, store, once=once, skip_sms_shop=args.skip_sms_shop, report_cli=report_cli))
         return 0
     except KeyboardInterrupt:
-        report("管理", "流程已停止。")
+        report_message("管理", "流程已停止。")
         return 0
     except (ValueError, StartupError, CleanupFatal, InfrastructureError, VerificationLimit) as error:
-        report("管理", f"流程停止：{error}")
+        report_message("管理", f"流程停止：{error}")
         return 1
     except Exception as error:
         # 第三方异常可能包含请求内容，不输出原文。
-        report("管理", f"流程停止（{type(error).__name__}），请检查配置及服务状态。")
+        report_message("管理", f"流程停止（{type(error).__name__}），请检查配置及服务状态。")
         return 1
     finally:
         if store:
