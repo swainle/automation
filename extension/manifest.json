@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "pdd_seller_desk.extension",
+  "version": "0.11.1",
+  "description": "连接本机 Python，读取页面元素并截图。",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "scripting", "debugger", "alarms", "cookies", "browsingData"],
+  "host_permissions": ["*://*.pinduoduo.com/*", "https://dun.163.com/*", "http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "options_page": "options.html",
+  "action": {"default_title": "配置工作台连接"},
+  "content_scripts": [{
+    "matches": ["https://mms.pinduoduo.com/*", "https://dun.163.com/*", "http://127.0.0.1/extension-test/*"],
+    "js": ["captcha-detect.js", "login.js", "content.js"],
+    "run_at": "document_idle"
+  }]
+}

@@ -1,0 +1,32 @@
+[project]
+name = "automation"
+version = "0.1.0"
+description = "拼多多商家工作台自动化"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "asyncssh>=2.21,<3",
+    "psutil>=7,<9",
+    "ddddocr>=1.6.1",
+    "flask>=3.0,<4",
+    "flask-restx>=1.3.2,<2",
+    "lark-oapi>=1.7.5",
+    "playwright>=1.64.1",
+    "python-dotenv>=1.2.4",
+    "websockets>=15,<16",
+    "xlsxwriter>=3.2,<4",
+]
+
+[project.scripts]
+automation = "automation.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: explicit tests against the local browser or connected services"]
+
+[build-system]
+requires = ["uv_build>=0.13.3,<0.14.0"]
+build-backend = "uv_build"

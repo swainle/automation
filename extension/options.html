@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>工作台连接配置</title><link rel="stylesheet" href="options.css"></head>
+<body><main>
+  <h1>工作台连接助手</h1>
+  <p>连接本机 Python，获取拼多多页面元素和截图。</p>
+  <form id="config">
+    <label for="endpoint">本机服务地址</label><input id="endpoint" type="url" value="ws://127.0.0.1:8765/" required>
+    <p class="hint">默认自动连接本机服务，无需 Token。通常不需要修改地址。</p>
+    <button type="submit">保存并连接</button>
+  </form>
+  <p id="message" role="status"></p><p>连接状态：<strong id="status">读取中</strong></p>
+  <p class="hint">截图时使用 Chrome debugger 权限，浏览器可能显示调试提示。支持元素读取、截图和拼多多账号登录；验证码不自动处理。</p>
+</main><script type="module" src="options.js"></script></body>
+</html>
