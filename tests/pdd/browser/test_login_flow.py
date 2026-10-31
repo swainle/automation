@@ -25,3 +25,16 @@ class LoginFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await submit_login("ws://127.0.0.1:8765/", 2, ShopCredential("fixture", "fake-account", "fake-password"))
         self.assertEqual(result["status"], "verification_required")
         self.assertEqual(mock.call_count, 1)
+
+    async def test_empty_submission_response_keeps_submitted_false(self):
+        mock = AsyncMock(side_effect=[{}, {"status": "logged_in"}])
+        with patch("automation.pdd.login.request", mock):
+            result = await submit_login("ws://127.0.0.1:8765/", 2, ShopCredential("fixture", "account", "password"))
+        self.assertEqual(result, {"status": "logged_in", "submitted": False})
+
+    async def test_submission_failure_is_propagated_without_retry(self):
+        mock = AsyncMock(side_effect=BridgeError("login_operation_failed"))
+        with patch("automation.pdd.login.request", mock):
+            with self.assertRaisesRegex(BridgeError, "login_operation_failed"):
+                await submit_login("ws://127.0.0.1:8765/", 2, ShopCredential("fixture", "account", "password"))
+        self.assertEqual(mock.call_count, 1)

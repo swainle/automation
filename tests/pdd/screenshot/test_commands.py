@@ -89,8 +89,8 @@ def test_init_cli_without_env_does_not_start_workflow(tmp_path, monkeypatch):
     monkeypatch.chdir(project)
     monkeypatch.setattr("sys.argv", ["automation.pdd.screenshot", "--init"])
     with patch.dict(os.environ, {"PDD_SCREENSHOT_ONCE": "invalid"}, clear=True), patch(
-        "automation.pdd.screenshot.Config.load", side_effect=AssertionError("初始化不能加载配置")
-    ), patch("automation.pdd.screenshot.run_interruptible") as run:
+        "automation.pdd.screenshot.runtime.Config.load", side_effect=AssertionError("初始化不能加载配置")
+    ), patch("automation.pdd.screenshot.runtime.run_interruptible") as run:
         assert main() == 0
         run.assert_not_called()
     business = runtime_root()
@@ -160,10 +160,10 @@ def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatc
     def fail(coroutine):
         coroutine.close()
         raise InfrastructureError("remote_cs_exited")
-    with patch("automation.pdd.screenshot.Config.load", return_value=cfg), patch(
+    with patch("automation.pdd.screenshot.runtime.Config.load", return_value=cfg), patch(
         "automation.pdd.screenshot.report.cli_path", return_value=Path("fixture.exe")
-    ), patch("automation.pdd.screenshot.configure"), patch(
-        "automation.pdd.screenshot.run_interruptible", side_effect=fail
+    ), patch("automation.pdd.screenshot.runtime.configure"), patch(
+        "automation.pdd.screenshot.runtime.run_interruptible", side_effect=fail
     ):
         assert main() == 1
     assert "remote_cs_exited" in capsys.readouterr().out

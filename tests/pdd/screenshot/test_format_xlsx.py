@@ -6,7 +6,7 @@ from xml.etree import ElementTree as ET
 import pytest
 import xlsxwriter
 
-from automation.pdd.screenshot.export import export_receivables
+from automation.pdd.screenshot.workbook import export_receivables
 from automation.pdd.screenshot.format_xlsx import format_report_file as format_daily_xlsx, S
 
 

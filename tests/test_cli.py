@@ -41,31 +41,32 @@ def test_screenshot_module_accepts_skip_sms_flag(tmp_path):
     from automation.pdd.screenshot import main as screenshot_main
     with ExitStack() as stack:
         stack.enter_context(patch("sys.argv", ["automation.pdd.screenshot", "--skip-sms-shop", "--once"]))
-        stack.enter_context(patch("automation.pdd.screenshot.load_environment"))
-        stack.enter_context(patch("automation.pdd.screenshot.Config.load", return_value=SimpleNamespace(root=tmp_path, db_path=tmp_path / 'db')))
+        stack.enter_context(patch("automation.pdd.screenshot.runtime.Config.load", return_value=SimpleNamespace(root=tmp_path, db_path=tmp_path / 'db')))
         for name in ("configure", "close_logs", "RunLock", "StateStore", "run_interruptible"):
-            stack.enter_context(patch(f"automation.pdd.screenshot.{name}"))
-        run = stack.enter_context(patch("automation.pdd.screenshot.run", new=Mock(return_value=object())))
+            stack.enter_context(patch(f"automation.pdd.screenshot.runtime.{name}"))
+        report_cli = tmp_path / "shadowbot.shell-cli.exe"
+        stack.enter_context(patch("automation.pdd.screenshot.report.cli_path", return_value=report_cli))
+        run = stack.enter_context(patch("automation.pdd.screenshot.runtime.run", new=Mock(return_value=object())))
         assert screenshot_main() == 0
-        assert run.call_args.kwargs == {"once": True, "skip_sms_shop": True}
+        assert run.call_args.kwargs == {"once": True, "skip_sms_shop": True, "report_cli": report_cli}
 
 
-def test_format_xlsx_does_not_load_business_config_or_start_services(tmp_path):
+def test_export_command_does_not_start_services(tmp_path):
     from contextlib import ExitStack
-    from automation.pdd.screenshot import main as screenshot_main
+    from automation.pdd.screenshot.export import main as export_main
     with ExitStack() as stack:
-        stack.enter_context(patch('sys.argv', ['automation.pdd.screenshot', '--format-xlsx']))
-        stack.enter_context(patch('automation.pdd.screenshot.load_environment'))
-        stack.enter_context(patch('automation.pdd.screenshot.ROOT', tmp_path))
-        stack.enter_context(patch('automation.pdd.screenshot.today', return_value='2026-10-31'))
-        stack.enter_context(patch('automation.pdd.screenshot.RunLock'))
-        stack.enter_context(patch('automation.pdd.screenshot.report'))
-        formatter = stack.enter_context(patch('automation.pdd.screenshot.format_xlsx.format_daily_xlsx', return_value=tmp_path / 'report.xlsx'))
-        config = stack.enter_context(patch('automation.pdd.screenshot.Config.load'))
-        run = stack.enter_context(patch('automation.pdd.screenshot.run'))
-        store = stack.enter_context(patch('automation.pdd.screenshot.StateStore'))
-        assert screenshot_main() == 0
-        formatter.assert_called_once_with(tmp_path, '2026-10-31')
+        stack.enter_context(patch('sys.argv', ['automation.pdd.screenshot.export']))
+        stack.enter_context(patch('automation.pdd.screenshot.config.load_environment', return_value=tmp_path))
+        stack.enter_context(patch('automation.pdd.screenshot.state.today', return_value='2026-10-31'))
+        stack.enter_context(patch('automation.pdd.screenshot.state.RunLock'))
+        stack.enter_context(patch('automation.pdd.screenshot.logs.configure'))
+        stack.enter_context(patch('automation.pdd.screenshot.logs.close'))
+        exporter = stack.enter_context(patch('automation.pdd.screenshot.export.export_day', return_value=tmp_path / 'report.xlsx'))
+        config = stack.enter_context(patch('automation.pdd.screenshot.runtime.Config.load'))
+        run = stack.enter_context(patch('automation.pdd.screenshot.runtime.run'))
+        store = stack.enter_context(patch('automation.pdd.screenshot.runtime.StateStore'))
+        assert export_main() == 0
+        exporter.assert_called_once_with(tmp_path, '2026-10-31')
         config.assert_not_called()
         run.assert_not_called()
         store.assert_not_called()

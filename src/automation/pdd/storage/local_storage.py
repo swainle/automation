@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from automation.pdd.storage.cookies import _endpoint
+from automation.com.extension.client import endpoint_for_port
 from automation.com.extension_bridge import request
 
 DEFAULT_URL = "https://mms.pinduoduo.com/home"
@@ -27,7 +27,7 @@ def validate_data(data):
 
 
 async def _operate(action, *, url, port, tab_id, data=None):
-    endpoint = _endpoint(port)
+    endpoint = endpoint_for_port(port)
     params = {"url": validate_url(url)}
     if tab_id is not None:
         params["tab_id"] = tab_id

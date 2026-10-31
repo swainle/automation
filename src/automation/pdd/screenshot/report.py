@@ -46,7 +46,7 @@ async def run_report(path):
 
 def main():
     import argparse
-    from automation.pdd.screenshot import run_interruptible
+    from automation.pdd.screenshot.runtime import run_interruptible
     from automation.pdd.screenshot.config import load_environment
     from automation.pdd.screenshot.logs import configure, close, report
     from automation.pdd.screenshot.state import RunLock

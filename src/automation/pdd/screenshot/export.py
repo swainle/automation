@@ -5,7 +5,7 @@ from automation.pdd.screenshot.workbook import export_receivables, parse_amount
 
 
 def export_day(root, day):
-    from automation.pdd.screenshot.format_xlsx import format_daily_xlsx
+    from automation.pdd.screenshot.reporting import format_daily_xlsx
     from automation.pdd.screenshot.logs import report
     path = format_daily_xlsx(root, day, database=Path(root) / "state/sqlite.db")
     report("管理", f"当天报表已导出：{path}")

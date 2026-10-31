@@ -5,11 +5,10 @@ from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from automation.pdd.verification import VERIFICATIONS, VERIFICATION_LABELS
+
 CHINA = timezone(timedelta(hours=8))
 DONE = {"success", "login_error"}
-VERIFICATIONS = {"slider_required", "sms_required", "verification_other", "verification_required"}
-VERIFICATION_LABELS = {"slider_required": "需要滑块验证", "sms_required": "需要短信验证",
-                       "verification_other": "需要其他身份验证", "verification_required": "需要其他身份验证"}
 
 
 def today():

@@ -347,10 +347,10 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             first = SimpleNamespace(start=AsyncMock(side_effect=InfrastructureError("exited")), stop=AsyncMock())
             second = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
             try:
-                with patch("automation.pdd.screenshot.Services", side_effect=[first, second]), patch(
-                    "automation.pdd.screenshot.load_shops", return_value=[]
-                ), patch("automation.pdd.screenshot.run_cycle", new=AsyncMock(return_value="finished")), patch(
-                    "automation.pdd.screenshot.asyncio.sleep", new=AsyncMock()
+                with patch("automation.pdd.screenshot.runtime.Services", side_effect=[first, second]), patch(
+                    "automation.pdd.screenshot.runtime.load_shops", return_value=[]
+                ), patch("automation.pdd.screenshot.runtime.run_cycle", new=AsyncMock(return_value="finished")), patch(
+                    "automation.pdd.screenshot.runtime.asyncio.sleep", new=AsyncMock()
                 ):
                     await run(cfg, store, once=True)
                 first.stop.assert_awaited_once()
@@ -367,9 +367,9 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             store = StateStore(root / "sqlite.db")
             service = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
             try:
-                with patch("automation.pdd.screenshot.Services", return_value=service) as factory, patch(
-                    "automation.pdd.screenshot.load_shops", return_value=[]
-                ), patch("automation.pdd.screenshot.run_cycle", new=AsyncMock(side_effect=CleanupFatal("failed"))):
+                with patch("automation.pdd.screenshot.runtime.Services", return_value=service) as factory, patch(
+                    "automation.pdd.screenshot.runtime.load_shops", return_value=[]
+                ), patch("automation.pdd.screenshot.runtime.run_cycle", new=AsyncMock(side_effect=CleanupFatal("failed"))):
                     with self.assertRaises(CleanupFatal):
                         await run(cfg, store, once=True)
                 self.assertEqual(factory.call_count, 1)

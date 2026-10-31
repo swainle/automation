@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from automation.com.extension_bridge import request
+from automation.com.extension.client import endpoint_for_port as _endpoint
 
 def load_cookies(path: Path) -> list[dict]:
     raw = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -34,13 +35,6 @@ def load_cookies(path: Path) -> list[dict]:
     if not cookies:
         raise ValueError("没有可导入的拼多多 Cookie")
     return cookies
-
-
-
-def _endpoint(port):
-    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
-        raise ValueError("WS 端口必须在 1024 到 65535 之间")
-    return f"ws://127.0.0.1:{port}/"
 
 
 async def import_cookies(path: str | Path, *, port=8765) -> dict:

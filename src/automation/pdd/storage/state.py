@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from automation.pdd.storage.cookies import _endpoint
+from automation.com.extension.client import endpoint_for_port
 from automation.pdd.storage.local_storage import DEFAULT_URL, validate_data, validate_url
 from automation.com.extension_bridge import request
 
@@ -38,7 +38,7 @@ async def _snapshot(endpoint, tab_id, url):
 
 
 async def import_state(path: str | Path, *, port=8765, tab_id=None, report=None):
-    endpoint = _endpoint(port)
+    endpoint = endpoint_for_port(port)
     raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     if not isinstance(raw, dict) or not isinstance(raw.get("cookies"), list):
         raise ValueError("文件必须包含 url、cookies 数组、local_storage 对象")
@@ -57,7 +57,7 @@ async def import_state(path: str | Path, *, port=8765, tab_id=None, report=None)
 
 
 async def export_state(path: str | Path, *, url=DEFAULT_URL, port=8765, tab_id=None, report=None):
-    endpoint = _endpoint(port)
+    endpoint = endpoint_for_port(port)
     tab_id = await _page(endpoint, url, tab_id)
     snapshot = await _snapshot(endpoint, tab_id, url)
     before = summary(snapshot)
@@ -71,7 +71,7 @@ async def export_state(path: str | Path, *, url=DEFAULT_URL, port=8765, tab_id=N
 
 
 async def clear_state(*, url=DEFAULT_URL, port=8765, tab_id=None, report=None):
-    endpoint = _endpoint(port)
+    endpoint = endpoint_for_port(port)
     tab_id = await _page(endpoint, url, tab_id)
     before = summary(await _snapshot(endpoint, tab_id, url))
     notify(report, "before", before)

@@ -5,7 +5,7 @@ import time
 from urllib.parse import urlparse
 
 from automation.com.extension_bridge import BridgeError, request
-from automation.pdd.screenshot.state import VERIFICATIONS
+from automation.pdd.verification import VERIFICATIONS
 
 
 async def select_login_tab(endpoint, tab_id=None):
@@ -19,18 +19,24 @@ async def select_login_tab(endpoint, tab_id=None):
     return tabs[0]["tab_id"]
 
 
-async def submit_login(endpoint, tab_id, credential, timeout=15):
-    submitted = None
+async def submit_once(rpc, tab_id, credential):
+    """提交一次；页面导航导致结果未知时，交由调用方查询状态。"""
     try:
-        result = await request(endpoint, "login_submit", {"tab_id": tab_id,
-                               "account": credential.account, "password": credential.password})
-        submitted = result.get("submitted", False)
-        if result.get("status") in VERIFICATIONS:
-            return {"status": result["status"], "submitted": submitted}
-    except BridgeError as exc:
-        # 导航可能使提交消息端口断开，此时只读取状态，绝不重发凭据或再次点击。
-        if str(exc) != "login_submission_outcome_unknown":
+        return await rpc("login_submit", {"tab_id": tab_id,
+                         "account": credential.account, "password": credential.password})
+    except BridgeError as error:
+        if str(error) != "login_submission_outcome_unknown":
             raise
+        return None
+
+
+async def submit_login(endpoint, tab_id, credential, timeout=15):
+    async def rpc(action, params):
+        return await request(endpoint, action, params)
+    result = await submit_once(rpc, tab_id, credential)
+    submitted = result.get("submitted", False) if result is not None else None
+    if result is not None and result.get("status") in VERIFICATIONS:
+        return {"status": result["status"], "submitted": submitted}
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

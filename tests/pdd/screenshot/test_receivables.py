@@ -10,7 +10,7 @@ from automation.pdd.screenshot.config import Config
 from automation.pdd.screenshot.runner import ShopRunner, load_shops, shop_folder_name
 from automation.pdd.credentials import ShopCredential
 from automation.com.feishu.sheets import SheetRecord
-from automation.pdd.screenshot.export import export_receivables, parse_amount
+from automation.pdd.screenshot.workbook import export_receivables, parse_amount
 from automation.pdd.screenshot.state import StateStore
 
 DAY = "2026-10-29"

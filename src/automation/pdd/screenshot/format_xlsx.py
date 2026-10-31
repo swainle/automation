@@ -7,8 +7,6 @@ from zipfile import ZipFile, ZIP_DEFLATED
 from xml.etree import ElementTree as ET
 
 from uuid import uuid4
-import sqlite3
-from tempfile import TemporaryDirectory
 from xlsxwriter.image import Image
 
 from automation.com.files import publish_file
@@ -201,100 +199,10 @@ def format_report_file(root, day):
     finally:
         temp.unlink(missing_ok=True)
 
-
-def shop_identity(name):
-    return name.strip().removeprefix('【拼多多】').strip()
-
-
-def read_source_shops(path):
-    if not path.is_file():
-        raise ValueError(f'管理人员来源表不存在：{path}')
-    shops = {}
-    found = False
-    with ZipFile(path) as archive:
-        strings = [''.join(t.text or '' for t in item.iter(f'{{{S}}}t'))
-                   for item in ET.fromstring(archive.read('xl/sharedStrings.xml'))] if 'xl/sharedStrings.xml' in archive.namelist() else []
-        for name in archive.namelist():
-            if not name.startswith('xl/worksheets/sheet') or not name.endswith('.xml'):
-                continue
-            columns = None
-            for row in ET.fromstring(archive.read(name)).findall(f'{{{S}}}sheetData/{{{S}}}row'):
-                values = {}
-                for cell in row:
-                    value = cell.findtext(f'{{{S}}}v', '')
-                    if cell.get('t') == 's':
-                        value = strings[int(value)]
-                    elif cell.get('t') == 'inlineStr':
-                        value = ''.join(item.text or '' for item in cell.iter(f'{{{S}}}t'))
-                    values[cell.get('r').rstrip('0123456789')] = value.strip()
-                if '店铺名称' in values.values() and '店铺管理人员' in values.values():
-                    columns = {value: col for col, value in values.items()}
-                    found = True
-                    continue
-                if columns is None:
-                    continue
-                shop = values.get(columns['店铺名称'], '')
-                platform = values.get(columns.get('平台名称'), '')
-                if not shop or (platform and platform != '拼多多') or (shop.startswith('【') and not shop.startswith('【拼多多】')):
-                    continue
-                key = shop_identity(shop)
-                manager = values.get(columns['店铺管理人员'], '')
-                if key in shops:
-                    raise ValueError(f'来源表同一店铺重复或管理人员不一致：{shop}')
-                shops[key] = {'manager': manager, 'row_number': int(row.get('r'))}
-    if not found:
-        raise ValueError('来源表缺少“店铺名称”和“店铺管理人员”表头')
-    if not shops:
-        raise ValueError('来源表没有拼多多店铺')
-    return shops
-
-
-def read_managers(path):
-    return {key: value['manager'] for key, value in read_source_shops(path).items()}
-
+# Existing import paths remain available to callers.
+from automation.pdd.screenshot.shops import read_source_shops, shop_identity
 
 def format_daily_xlsx(root, day, *, database=None):
-    """从当天数据库及人员来源表重建，不读取旧输出表。"""
-    from automation.pdd.screenshot.export import export_receivables
-    from automation.pdd.screenshot.state import VERIFICATION_LABELS
-    root = Path(root)
-    source_shops = read_source_shops(root / 'data/店铺应收截图.xlsx')
-    database = Path(database) if database is not None else root / 'data/sqlite.db'
-    if not database.is_file():
-        raise ValueError(f'数据库不存在：{database}')
-    connection = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)
-    connection.row_factory = sqlite3.Row
-    try:
-        records = connection.execute(
-            'SELECT shop,amount,image_path,status,reason FROM daily_shops WHERE day=? '
-            'ORDER BY row_number IS NULL,row_number,rowid', (day,)).fetchall()
-    finally:
-        connection.close()
-    if not records:
-        raise ValueError(f'数据库没有当天店铺记录：{day}')
-    by_shop = {}
-    for record in records:
-        if record['shop'].strip().startswith('【') and not record['shop'].strip().startswith('【拼多多】'):
-            continue
-        key = shop_identity(record['shop'])
-        if key not in source_shops:
-            continue
-        if key in by_shop:
-            raise ValueError(f'数据库存在同名店铺记录：{key}')
-        by_shop[key] = record
-    rows = []
-    for key, source in source_shops.items():
-        record = by_shop.get(key, {'status': 'pending', 'reason': '当天无数据', 'image_path': '', 'amount': None})
-        reason = '' if record['status'] == 'success' else VERIFICATION_LABELS.get(record['status'], record['reason'] or record['status'])
-        image = Path(record['image_path']) if record['image_path'] else None
-        if image and not image.is_absolute():
-            image = root / image
-        rows.append({'shop': '【拼多多】' + key, 'amount': record['amount'],
-                     'image_path': str(image) if image else '', 'manager': source['manager'], 'exception': reason})
-    folder = root / 'data' / day
-    folder.mkdir(parents=True, exist_ok=True)
-    with TemporaryDirectory(prefix='.rebuild-', dir=folder) as temporary:
-        temp_root = Path(temporary)
-        export_receivables(temp_root, day, rows)
-        generated = format_report_file(temp_root, day)
-        return publish_file(generated, folder / '店铺应收截图.xlsx')
+    """兼容原有导入入口；报表组装由 reporting 负责。"""
+    from automation.pdd.screenshot.reporting import format_daily_xlsx as rebuild
+    return rebuild(root, day, database=database)

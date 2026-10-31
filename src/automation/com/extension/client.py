@@ -41,3 +41,9 @@ def save_jpeg(result, path):
     temp.write_bytes(raw)
     temp.replace(path)
     return path.resolve()
+
+
+def endpoint_for_port(port):
+    if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+        raise ValueError("WS 端口必须在 1024 到 65535 之间")
+    return f"ws://127.0.0.1:{port}/"

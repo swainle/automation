@@ -13,13 +13,16 @@ from websockets.exceptions import ConnectionClosed
 from automation.com.extension_bridge import BridgeError, request
 from automation.com.extension.client import save_jpeg
 from automation.com.files import publish_file, write_versioned
+from automation.pdd.login import submit_once
 from automation.pdd.credentials import FeishuCredentials, ShopCredential, text_value
 from automation.pdd.screenshot.services import InfrastructureError, StartupError
 from automation.pdd.screenshot.blocking import blocking
 from automation.pdd.screenshot.logs import log
-from automation.pdd.screenshot.state import today, VERIFICATIONS, VERIFICATION_LABELS
+from automation.pdd.screenshot.state import today
+from automation.pdd.verification import VERIFICATIONS, VERIFICATION_LABELS
 from automation.pdd.screenshot.workbook import export_receivables, parse_amount
-from automation.pdd.screenshot.format_xlsx import read_source_shops, shop_identity
+from automation.pdd.screenshot.shops import read_source_shops, shop_identity
+from automation.pdd.screenshot.reporting import report_row
 
 SHOP_NAME_SELECTOR = "#mms-header-next .user-info-top .user-name-name > span"
 
@@ -226,14 +229,9 @@ class ShopRunner:
                         missing.append("password")
                     raise LoginError("credentials_missing_" + "_and_".join(missing))
                 # login_submit 自带切换账号登录；提交结果不明时只轮询状态，不再次提交。
-                try:
-                    response = await self.rpc("login_submit", {"tab_id": self.tab,
-                        "account": self.shop.account, "password": self.shop.password})
-                    if response.get("status") in VERIFICATIONS:
-                        raise LoginError(response["status"])
-                except BridgeError as error:
-                    if str(error) != "login_submission_outcome_unknown":
-                        raise
+                response = await submit_once(self.rpc, self.tab, self.shop)
+                if response is not None and response.get("status") in VERIFICATIONS:
+                    raise LoginError(response["status"])
                 await asyncio.sleep(.5)
                 log("业务", f"{self.shop.shop_name}：登录已提交，等待店铺名或待收货数据区域（最多 {self.config.page_timeout:g} 秒）")
                 deadline = time.monotonic() + self.config.page_timeout
@@ -390,11 +388,8 @@ class ShopRunner:
             records = []
             for shop in shops:
                 state = self.store.get(day, shop.shop_name) or {}
-                records.append({**saved.get(shop.shop_name, {"shop": shop.shop_name, "amount": None, "image_path": ""}),
-                                "shop": '【拼多多】' + shop_identity(shop.shop_name),
-                                "manager": shop.manager,
-                                "exception": VERIFICATION_LABELS[state["status"]] if state.get("status") in VERIFICATIONS else
-                                "" if state.get("status") == "success" else state.get("reason") or state.get("status", "pending")})
+                records.append(report_row(shop.shop_name, shop.manager,
+                                          saved.get(shop.shop_name, {}), state))
             path = export_receivables(self.config.root, day, records)
             log("业务", f"店铺应收截图表已导出：{path}")
 
