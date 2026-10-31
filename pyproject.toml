@@ -2,7 +2,6 @@
 name = "automation"
 version = "0.1.0"
 description = "拼多多商家工作台自动化"
-readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "asyncssh>=2.21,<3",
