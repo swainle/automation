@@ -7,10 +7,16 @@
 
 在代码项目目录执行 `uv run`。截图业务四个入口统一读取 `../automation.pdd.screenshot/.env`，以该文件所在目录为业务根目录，不再使用 `RPA_ROOT`。配置缺失时明确报错，不回退读取项目 `.env`；已有环境变量优先。影刀 CLI 目录由 `SHADOWBOT_CLI_DIR` 指定，开发机为 `C:/Program Files/ShadowBot`。
 
-首次使用，将项目 `.env.example` 复制到上述业务目录并填写。通用模块独立运行仍沿用其原有工作目录配置规则。
+首次使用，在代码项目目录执行：
+
+```powershell
+uv run python -m automation.pdd.screenshot --init
+```
+
+初始化会创建相邻业务目录中的 `data/cookies/Cookie/`、`logs/`、`state/` 和内置模板 `.env`，不需要预先配置环境。已有目录和 `.env` 不覆盖，可以重复执行；完成后退出，不启动爬取、浏览器、服务或影刀任务。填写飞书配置、核对影刀 CLI 路径，并准备 `data/店铺应收截图.xlsx`、Cookie 文件（或远程 CS）、Chrome 插件及影刀应用后，再运行完整流程。通用模块独立运行仍沿用其原有工作目录配置规则。
 
 ```text
-D:/repo/automation/                         项目代码和 .env.example
+D:/repo/automation/                         项目代码
 D:/repo/automation.pdd.screenshot/.env        业务配置
 D:/repo/automation.pdd.screenshot/
   data/店铺应收截图.xlsx                    店铺及管理人员来源表
@@ -31,6 +37,8 @@ uv run python -m automation.pdd.screenshot.crawl --skip-sms-shop --once
 uv run python -m automation.pdd.screenshot.export
 # 仅同步运行影刀报表
 uv run python -m automation.pdd.screenshot.report
+# 独立启动 Cookie 服务，读取相邻业务目录 .env
+uv run python -m automation.pdd.screenshot.cookeis_server
 ```
 
 完整流程和爬取入口默认常驻、北京时间跨日重启，均支持 `--once`、`--skip-sms-shop`。完整流程启动前检查影刀路径，每天正常爬取结束后导出，成功后调用影刀应用 `f00b7263-9e1b-4e17-af4c-cc35676fc44d`。影刀使用 CLI 默认同步模式等待结束（默认最长 10 分钟）；失败退出并保留本地结果。爬取异常或验证上限退出时，本地状态仍保存，可单独导出；不会启动影刀。单独爬取、导出不要求影刀配置。
@@ -60,7 +68,7 @@ SQLite 仅使用 `daily_shops`，保存日期、店铺名、飞书行号、管�
 连续实际处理的第 6 家店铺需要验证码时，先保存状态并清理，再退出程序；需要报表时单独运行 export；跳过的店铺不参与计数，其他处理结果归零。每个日期轮次重新计数。
 旧三表数据库需先停止程序、备份数据库，再执行 `migrate/20261031134259_merge_daily_shops.sql`（仅执行一次，适用于包含 `manager`、`row_number` 的上一版结构）；程序会提示迁移，不自动删除旧表。迁移保留任务及金额图片记录，旧事件明细仅保留在备份中。
 `daily_shops.row_number` 保存飞书原始行号；每次读取店铺列表后更新当天记录，包括已完成并跳过的店铺。旧库自动补列，未重新读取的历史记录保持 NULL。
-WS 端口统一使用 `AUTOMATION_WS_PORT`，其他现有配置名继续保留，见 `.env.example`。
+WS 端口统一使用 `AUTOMATION_WS_PORT`，其他现有配置名继续保留，见 `--init` 生成的业务 `.env`。
 完整工作流自行管理 CS、WS 与 Chrome，启动前先停止单独运行的 CS、WS；启动时会关闭现有 Chrome 并准备配置。
 
 `uvx automation ...` 要求包已发布到所用索引或安装为本机工具。本地使用本项目版本，可在仓库执行：
@@ -419,7 +427,7 @@ uv run python tests/pdd/captcha/test_yidun_integration.py
 
 ## 每日逐店自动化
 
-先停止单独运行的 CS、WS，执行 `uv sync --locked`。保持现有 `.env` 中飞书配置，并参考 `.env.example` 增加自动化配置。店铺名选择器固定在 `automation/runner.py`：`#mms-header-next .user-info-top .user-name-name > span`，无需环境变量配置；其唯一可见元素的文本必须与飞书店铺名完全一致。
+先停止单独运行的 CS、WS，执行 `uv sync --locked`。先执行 `uv run python -m automation.pdd.screenshot --init`，再填写业务工作目录 `.env` 中的飞书及自动化配置。店铺名选择器固定在 `automation/runner.py`：`#mms-header-next .user-info-top .user-name-name > span`，无需环境变量配置；其唯一可见元素的文本必须与飞书店铺名完全一致。
 
 ```powershell
 # 默认保持运行，等待北京时间次日自动开始
@@ -549,3 +557,5 @@ Ctrl+C 第一次请求停止并等待清理，期间重复 Ctrl+C 不打断清�
 SSH 用户名、密码、端口分别通过 `CS_SSH_USER`、`CS_SSH_PASSWORD`、`CS_SSH_PORT` 配置。密码按原字符串传给 AsyncSSH，不去除首尾空格，不拼入远程命令，不写入日志，也不包含在 Config 的 repr 中。主机验证仍使用 known_hosts。只有 `CS_SSH_HOST` 非空才启用远程 CS；本地 Cookie 目录配置不能代替远端 `.env` 的 `COOKIES_DIR`。
 
 业务步骤之间默认等待 0.5 秒，Cookie 导入后到打开工作台前等待 1 秒。自动化导航不等待整页加载完成，跳转后最多等待 10 秒，出现账号登录按钮、店铺名或后台待收货数据区域即继续；超时重试当前店铺。提交登录后等待 0.5 秒再轮询结果，使用统一截止时间，默认最多 30 秒。导航动作异常记为可重试的 business_failed，不直接计为当天登录完成。新版等待逻辑需要重新加载 0.11.1 插件并重启 automation。
+
+截图业务专用 Cookie 服务入口 `automation.pdd.screenshot.cookeis_server`（名称按命令中的拼写）从代码项目目录运行，读取 `../automation.pdd.screenshot/.env`，Cookie 相对路径以业务目录为基准。它独立运行服务，不管理 SSH 心跳；现有 SSH 自动管理模式仍使用 `automation.pdd.screenshot.remote`。

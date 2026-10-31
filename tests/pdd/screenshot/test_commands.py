@@ -79,3 +79,71 @@ def test_report_failure_and_path_with_spaces():
             asyncio.run(run_report(path))
         assert spawn.call_args.args == (str(path), "console", "task", "run", "--app-id", APP_ID)
         assert spawn.call_args.kwargs["cwd"] == path.parent
+
+
+def test_init_cli_without_env_does_not_start_workflow(tmp_path, monkeypatch):
+    from automation.pdd.screenshot import main
+    from dotenv import dotenv_values
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("sys.argv", ["automation.pdd.screenshot", "--init"])
+    with patch.dict(os.environ, {"PDD_SCREENSHOT_ONCE": "invalid"}, clear=True), patch(
+        "automation.pdd.screenshot.Config.load", side_effect=AssertionError("初始化不能加载配置")
+    ), patch("automation.pdd.screenshot.run_interruptible") as run:
+        assert main() == 0
+        run.assert_not_called()
+    business = runtime_root()
+    assert all((business / name).is_dir() for name in ["data/cookies/Cookie", "logs", "state"])
+    values = dotenv_values(business / ".env")
+    assert values["FEISHU_APP_SECRET"] == ""
+    assert values["COOKIES_DIR"] == "./data/cookies/Cookie"
+    assert values["SHADOWBOT_CLI_DIR"] == "C:/Program Files/ShadowBot"
+    assert not (business / "state/sqlite.db").exists()
+    with patch.dict(os.environ, {}, clear=True):
+        assert Config.load().root == business
+
+
+def test_init_preserves_existing_configuration_and_data(tmp_path):
+    from automation.pdd.screenshot.initialize import initialize
+    project = tmp_path / "project"
+    business = runtime_root(project)
+    business.mkdir()
+    original = b"# existing settings\r\nFEISHU_APP_SECRET=fixture\r\n"
+    (business / ".env").write_bytes(original)
+    (business / "data").mkdir()
+    (business / "data/existing.txt").write_bytes(b"existing data")
+    initialize(project)
+    initialize(project)
+    assert (business / ".env").read_bytes() == original
+    assert (business / "data/existing.txt").read_bytes() == b"existing data"
+    assert (business / "state").is_dir()
+
+
+def test_business_cookie_server_uses_business_config(tmp_path, monkeypatch):
+    from automation.pdd.screenshot.cookeis_server import main
+    project = tmp_path / "project"
+    project.mkdir()
+    business = runtime_root(project)
+    business.mkdir()
+    (business / ".env").write_text("COOKIES_DIR=inputs/cookies\nCOOKIES_SERVER_PORT=9876\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("sys.argv", ["cookeis_server"])
+    app = Mock()
+    with patch.dict(os.environ, {}, clear=True), patch(
+        "automation.com.cookies_server.app.create_app", return_value=app
+    ) as create:
+        assert main() == 0
+        create.assert_called_once_with(business / "inputs/cookies")
+        app.run.assert_called_once_with(host="127.0.0.1", port=9876, debug=False)
+
+
+def test_business_cookie_server_missing_config_does_not_start(tmp_path, monkeypatch):
+    from automation.pdd.screenshot.cookeis_server import main
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("sys.argv", ["cookeis_server"])
+    with patch("automation.pdd.screenshot.cookeis_server.serve") as serve:
+        assert main() == 1
+        serve.assert_not_called()

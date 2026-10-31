@@ -147,9 +147,9 @@ def create_app(cookies_dir: Path) -> Flask:
     return app
 
 
-def main() -> int:
+def main(*, root=ROOT) -> int:
     try:
-        config = ServerConfig.load(ROOT)
+        config = ServerConfig.load(root)
         app = create_app(config.cookies_dir)
         print(
             f"cookies_server 已启动：http://{config.host}:{config.port}/（数据目录 {config.cookies_dir}）",

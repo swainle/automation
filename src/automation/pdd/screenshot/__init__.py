@@ -119,11 +119,17 @@ def run_interruptible(coroutine):
 
 def main(*, crawl_only=False):
     parser = argparse.ArgumentParser(description=__doc__)
+    if not crawl_only:
+        parser.add_argument("--init", action="store_true", help="初始化业务文件夹和 .env，保留已有文件后退出")
     parser.add_argument("--once", action="store_true", default=None, help="处理完当天一轮后退出，默认等待次日自动开始")
     parser.add_argument("--skip-sms-shop", action="store_true", help="跳过当天已记录为 sms_required 的店铺")
     args = parser.parse_args()
     store = None
     try:
+        if getattr(args, "init", False):
+            from automation.pdd.screenshot.initialize import initialize
+            initialize()
+            return 0
         config = Config.load()
         once = env_bool("PDD_SCREENSHOT_ONCE") if args.once is None else args.once
         from automation.pdd.screenshot.report import cli_path

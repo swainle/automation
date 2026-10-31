@@ -78,6 +78,6 @@ def load_environment(project_root=None):
     root = runtime_root(project_root)
     path = root / ".env"
     if not path.is_file():
-        raise ValueError(f"业务配置不存在：{path}；请从项目 .env.example 复制并填写")
+        raise ValueError(f"业务配置不存在：{path}；请先运行 uv run python -m automation.pdd.screenshot --init 并填写配置")
     load_dotenv(path)
     return root
