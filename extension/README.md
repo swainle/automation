@@ -204,7 +204,7 @@ uv run python tests/pdd/captcha/test_yidun_integration.py
 手机模式使用 `uv run python -m automation.pdd.spider.ranking --ios`，不需要此插件。
 
 
-先运行 `uv run python -m automation.pdd.spider.sogou` 可准备并保留搜狗、移动视口和插件服务；后续 ranking/product 优先复用。
+`uv run python -m automation.pdd.spider.sogou`（或 `.chrome`、`.edge`）独立补采网页产品 ID、链接和上架日期；自动打开对应浏览器的任务窗口并等待页面加载，成功后关闭任务窗口。三个浏览器均须安装本插件。主命令 `automation.pdd.spider` 仅采集手机，不再自动补采网页。
 商品通过 `product_open` 在导航前启用扩展 Network 监听，`product_dom` 仅允许固定元素操作；`product_network` 按商品标签页和评价请求阶段隔离响应，`product_close` 只关闭此商品临时页。
 无需任何浏览器远程调试端口，浏览器扩展需要重新加载至 0.13.0。
 

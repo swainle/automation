@@ -36,6 +36,8 @@ def browser_for_peer(peer_port, server_port, fallback):
                 name = psutil.Process(connection.pid).name().lower()
                 if 'sogou' in name:
                     return 'sogou'
+                if name in {'msedge', 'msedge.exe'}:
+                    return 'edge'
                 if name in {'chrome', 'chrome.exe', 'chromium', 'chromium.exe'}:
                     return 'chrome'
     except psutil.Error:
@@ -50,15 +52,15 @@ class Bridge:
         self.peers = {}
         self.owners = {}
         self.pending = {}
-        self.locks = {browser: asyncio.Lock() for browser in ('chrome', 'sogou')}
+        self.locks = {browser: asyncio.Lock() for browser in ('chrome', 'sogou', 'edge')}
 
     @property
     def extension(self):
-        return self.extensions.get('chrome') or self.extensions.get('sogou')
+        return self.extensions.get('chrome') or self.extensions.get('sogou') or self.extensions.get('edge')
 
     async def dispatch(self, action, params, browser=None):
         browser = browser or ('sogou' if isinstance(action, str) and action.startswith(('ranking_', 'product_')) else 'chrome')
-        if browser not in {'chrome', 'sogou'}:
+        if browser not in {'chrome', 'sogou', 'edge'}:
             raise BridgeError('invalid_browser')
         if action == "status":
             result = {"connected": browser in self.extensions, "protocol": 3, "browser": browser}
@@ -110,7 +112,7 @@ class Bridge:
                 raise BridgeError("invalid_handshake")
             if role == "extension":
                 browser = hello.get('browser', 'chrome')
-                if browser not in {'chrome', 'sogou'}:
+                if browser not in {'chrome', 'sogou', 'edge'}:
                     raise BridgeError('invalid_browser')
                 browser = await asyncio.to_thread(browser_for_peer, websocket.remote_address[1],
                                                   websocket.local_address[1], browser)
@@ -182,7 +184,7 @@ def main():
     load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=int(os.getenv("AUTOMATION_WS_PORT", "8765")))
-    parser.add_argument('--browser', choices=('chrome', 'sogou'), default='chrome', help='客户端命令的目标浏览器')
+    parser.add_argument('--browser', choices=('chrome', 'sogou', 'edge'), default='chrome', help='客户端命令的目标浏览器')
     sub = parser.add_subparsers(dest="command")
     for name in ("serve", "status", "tabs"):
         sub.add_parser(name)

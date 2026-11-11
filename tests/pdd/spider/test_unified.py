@@ -154,50 +154,14 @@ def test_retries_beyond_three_rounds(board, monkeypatch):
     assert len(attempts) == 5
 
 
-@pytest.mark.parametrize('second_mobile_duration', [100, 2000])
-def test_failed_web_does_not_block_next_mobile_and_retries_when_due(board, monkeypatch, second_mobile_duration):
-    store, first = board
-    second = store.seed_rankings('2026-11-10', [{'name': '第二榜', 'main_name': '第二榜', 'tab': '畅销榜',
-        'url': 'https://example.com/second', 'tab_index': 0}], config.OUTPUT_ROOT)[0]
-    store.save_rows(second['id'], second['directory'], [], [{'排行': 1, '标题': '另一个产品'}])
-    entries = [first, second]
-    monkeypatch.setattr('automation.pdd.spider.rank.read_leaderboards', lambda path: ['sources'])
-    monkeypatch.setattr(store, 'seed_rankings', lambda *args: entries)
-    now, events, due, attempts = [0], [], {}, {}
-    monkeypatch.setattr(unified.time, 'monotonic', lambda: now[0])
-    monkeypatch.setattr(unified.time, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
-    monkeypatch.setattr(unified, 'remaining_web_wait', lambda entry: max(0, due.get(entry['id'], 0) - now[0]))
-    def mobile(store, runtime, entry, product_id):
-        events.append(('mobile', entry['id']))
-        finish_mobile(store, entry)
-        if entry['id'] == second['id']:
-            now[0] += second_mobile_duration
-    def web(store, runtime, entry, product_id):
-        list_id = entry['id']
-        events.append(('web', list_id))
-        attempts.setdefault(list_id, []).append(now[0])
-        if list_id == first['id'] and len(attempts[list_id]) == 1:
-            due[list_id] = now[0] + 1800
-            return
-        with store.db.transaction():
-            store.db.execute("UPDATE t_pdd_ranking_products SET sogou_state='completed' WHERE ranking_id=%s", (list_id,))
-    completed = []
-    original_state = store.list_state
-    def list_state(list_id, state):
-        if state == 'completed':
-            completed.append(list_id)
-        original_state(list_id, state)
-    monkeypatch.setattr(store, 'list_state', list_state)
-    monkeypatch.setattr(unified, 'mobile_round', mobile)
+def test_mobile_collection_never_requests_web(board, monkeypatch):
+    store, entry = board
+    monkeypatch.setattr(unified, 'mobile_round', lambda *args: finish_mobile(store, entry))
+    web = Mock(side_effect=AssertionError('手机采集不应访问网页'))
     monkeypatch.setattr(unified, 'web_round', web)
-    monkeypatch.setattr(config, 'POSTGRES_URL', 'test-dsn')
-    assert unified.collect(store, Mock()) == 0
-    assert events[:3] == [('mobile', first['id']), ('web', first['id']), ('mobile', second['id'])]
-    assert attempts[first['id']] == [0, max(1800, second_mobile_duration)]
-    assert attempts[second['id']] == [second_mobile_duration]
-    assert events.count(('mobile', first['id'])) == events.count(('mobile', second['id'])) == 1
-    expected = [second['id'], first['id']] if second_mobile_duration < 1800 else [first['id'], second['id']]
-    assert completed == expected
+    assert unified.collect(store, Mock(), ranking_id=entry['id']) == 0
+    web.assert_not_called()
+    assert store.list(entry['id'])['collect_state'] == 'pending'
 
 
 def test_mobile_round_replaces_only_unfinished_product(board, monkeypatch):

@@ -87,24 +87,28 @@ class Runtime:
         self._ranking_started = False
         self._ranking_launcher = None
         self._ranking_keep_open = False
+        self.ranking_browser = 'sogou'
+        self.ranking_executable = None
+        self.ranking_user_data_dir = None
+        self.ranking_window = False
 
     def ranking_request(self, action, params=None, *, timeout=40):
         from automation.com.extension_bridge import request
         async def call():
-            return await asyncio.wait_for(request(f'ws://127.0.0.1:{config.RANKING_WS_PORT}/', action, params, browser='sogou'), timeout)
+            return await asyncio.wait_for(request(f'ws://127.0.0.1:{config.RANKING_WS_PORT}/', action, params, browser=self.ranking_browser), timeout)
         return asyncio.run(call())
 
     def _verify_ranking_browser(self, peer_port):
         if not isinstance(peer_port, int):
             raise RuntimeError('插件服务版本过旧，请停止旧 bridge 后重试')
-        expected = Path(config.SOGOU_EXECUTABLE).resolve()
+        expected = Path(self.ranking_executable or config.SOGOU_EXECUTABLE).resolve()
         for connection in psutil.net_connections(kind='tcp'):
             if (connection.pid is not None and connection.laddr and connection.raddr
                     and connection.laddr.port == peer_port and connection.raddr.port == config.RANKING_WS_PORT):
                 if Path(psutil.Process(connection.pid).exe()).resolve() == expected:
                     return
-                raise RuntimeError('榜单插件连接来自其他浏览器；请将榜单服务地址仅配置到搜狗插件')
-        raise RuntimeError('无法确认搜狗插件连接的进程，请检查连接状态后重试')
+                raise RuntimeError(f'榜单插件连接来自其他浏览器，预期：{expected}')
+        raise RuntimeError(f'无法确认 {self.ranking_browser} 插件连接的进程，请检查连接状态后重试')
 
     @timed_operation('[环境] 连接商品采集浏览器')
     def connect_product_browser(self):
@@ -131,9 +135,9 @@ class Runtime:
         if (not 1024 <= config.RANKING_WS_PORT <= 65535 or not math.isfinite(config.RANKING_READY_TIMEOUT)
                 or config.RANKING_READY_TIMEOUT <= 0):
             raise ValueError('请检查搜狗插件端口和启动超时配置')
-        executable = Path(config.SOGOU_EXECUTABLE)
+        executable = Path(self.ranking_executable or config.SOGOU_EXECUTABLE)
         if not executable.is_file():
-            raise RuntimeError(f'搜狗浏览器不存在：{executable}')
+            raise RuntimeError(f'浏览器不存在：{executable}')
         reuse_ws = port_ready(config.RANKING_WS_PORT)
         if reuse_ws:
             print(f'[WS] 复用现有公共服务：ws://127.0.0.1:{config.RANKING_WS_PORT}/')
@@ -147,7 +151,7 @@ class Runtime:
                                  creationflags=flags, start_new_session=sys.platform != 'win32',
                                  env=dict(os.environ, PYTHONIOENCODING='utf-8'))
             print(f'[WS] 已启动公共后台服务：ws://127.0.0.1:{config.RANKING_WS_PORT}/')
-        print(f'[搜狗] 使用插件连接 ws://127.0.0.1:{config.RANKING_WS_PORT}/；优先复用已打开的搜狗')
+        print(f'[{self.ranking_browser}] 等待插件连接 ws://127.0.0.1:{config.RANKING_WS_PORT}/')
         deadline = time.monotonic() + config.RANKING_READY_TIMEOUT
         launched = False
         while time.monotonic() < deadline:
@@ -161,20 +165,21 @@ class Runtime:
             if status.get('connected'):
                 self._verify_ranking_browser(status.get('extension_peer_port'))
                 result = self.ranking_request('ranking_prepare' if persistent else 'ranking_open',
-                    {'reuse_workspace': True})
+                    {'reuse_workspace': not self.ranking_window, 'new_window': self.ranking_window})
                 self.ranking_tab = result['tab_id']
-                self._ranking_keep_open = result.get('persistent', False)
+                self._ranking_keep_open = self.ranking_window or result.get('persistent', False)
                 if result.get('protocol') != 2:
-                    raise RuntimeError('请在搜狗扩展管理中重新加载本仓库插件（0.13.0）')
+                    raise RuntimeError('请在浏览器扩展管理中重新加载本仓库插件')
                 self._ranking_started = True
                 return
             if not launched:
-                self._ranking_launcher = subprocess.Popen([str(executable), f'--user-data-dir={config.USER_DATA_DIR}', 'about:blank'],
+                startup = '--no-startup-window' if self.ranking_window else 'about:blank'
+                self._ranking_launcher = subprocess.Popen([str(executable), f'--user-data-dir={self.ranking_user_data_dir or config.USER_DATA_DIR}', startup],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
                 launched = True
             time.sleep(.5)
-        raise RuntimeError('搜狗插件未就绪，请在搜狗中安装/重新加载插件并核对连接地址')
+        raise RuntimeError(f'{self.ranking_browser} 插件未就绪，请安装/重新加载插件并核对连接地址')
 
     def _ios_command(self, *args, timeout=60, stream=False):
         from processkit import Command

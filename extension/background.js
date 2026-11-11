@@ -168,7 +168,7 @@ async function connect() {
   catch { await status("连接地址无效，仅允许 127.0.0.1"); return; }
   const ws = new WebSocket(endpoint);
   socket = ws;
-  ws.onopen = () => ws.send(JSON.stringify({type: "hello", role: "extension", browser: /MetaSr|Sogou/i.test(navigator.userAgent) ? "sogou" : "chrome"}));
+  ws.onopen = () => ws.send(JSON.stringify({type: "hello", role: "extension", browser: /MetaSr|Sogou/i.test(navigator.userAgent) ? "sogou" : /Edg\//.test(navigator.userAgent) ? "edge" : "chrome"}));
   ws.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }

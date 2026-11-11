@@ -1,10 +1,10 @@
-"""Run the complete mobile ranking and product pipeline."""
+"""Run the mobile ranking and product pipeline."""
 import argparse
 import psycopg
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='手机与搜狗整榜采集；--check 查看状态')
+    parser = argparse.ArgumentParser(description='手机整榜采集；--check 查看状态')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='只读检查环境并显示采集状态 ASCII 表格')
     mode.add_argument('--switch-data', metavar='YYYY-MM-DD', help='将该日期的数据库采集数据迁至 --switch-to')
@@ -36,7 +36,7 @@ def main(argv=None):
     from automation.pdd.spider.unified import collect
     from types import SimpleNamespace
     from automation.pdd.spider.commands import execute
-    return execute('手机与搜狗整榜采集',
+    return execute('手机整榜采集',
         lambda store, runtime: collect(store, runtime, args.ranking_id, args.ranking_product_id),
         args=SimpleNamespace(ios=True, mobile=True), role='rank')
 

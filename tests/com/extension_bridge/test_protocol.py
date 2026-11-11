@@ -58,6 +58,15 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BridgeError, "unsupported_action"):
             await request(self.endpoint, "execute_javascript")
 
+    async def test_edge_routes_ranking_requests(self):
+        async with connect(self.endpoint) as edge:
+            await edge.send(json.dumps({'type': 'hello', 'role': 'extension', 'browser': 'edge'}))
+            self.assertTrue(json.loads(await edge.recv())['ok'])
+            task = asyncio.create_task(request(self.endpoint, 'ranking_read', browser='edge'))
+            message = json.loads(await asyncio.wait_for(edge.recv(), 2))
+            await edge.send(json.dumps({'type': 'result', 'id': message['id'], 'ok': True, 'result': {'cards': []}}))
+            self.assertEqual(await task, {'cards': []})
+
     async def test_two_browsers_route_requests_and_disconnect_independently(self):
         async with connect(self.endpoint) as chrome, connect(self.endpoint) as sogou:
             for browser, socket in [('chrome', chrome), ('sogou', sogou)]:

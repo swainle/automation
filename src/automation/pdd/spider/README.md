@@ -64,17 +64,24 @@ automation.pdd.spider/
 
 可在业务 `.env` 调整 `SPIDER_SOGOU_EXECUTABLE`、`SPIDER_SOGOU_USER_DATA_DIR`、`SPIDER_SOURCE_XLSX`、`SPIDER_OUTPUT_DIR`、`SPIDER_TOOLS_DIR`、`SPIDER_RETRY_ATTEMPTS`、`SPIDER_RETRY_DELAY` 和 `SPIDER_PRODUCT_RETRY_DELAY`。WDA Bundle ID 自动检测，也可设置 `WDA_BUNDLE_ID`。
 
-## 先准备并保留搜狗
+## 独立补采网页产品信息
 
 ```powershell
 uv run python -m automation.pdd.spider.sogou
+uv run python -m automation.pdd.spider.chrome
+uv run python -m automation.pdd.spider.edge
+# 三个入口均支持以下筛选：
+uv run python -m automation.pdd.spider.chrome --ranking-id 12
+uv run python -m automation.pdd.spider.edge --ranking-product-id 34
 ```
 
-`sogou` 初始化命令先关闭所有搜狗窗口及其后台子进程，确认退出后重新打开；关闭失败时停止初始化。公共 WS 服务优先复用。窗口大小、页面缩放和视口由用户手动设置，插件不再修改这些设置。命令成功后退出，但保留浏览器、已配置的工作标签页和后台插件通信服务；后台服务日志为业务目录 `logs/sogou-bridge.log`（由搜狗启动时）。
+默认读取本周已有榜单，只给手机已完成、网页未完成的产品补采产品 ID、链接和上架日期，不创建榜单或执行手机采集。指定 ID 可处理其他周的数据。三个入口共享原有网页完成状态（数据库字段仍为 `sogou_state`），换浏览器不会重复采集已完成项。
 
-后续 `ranking` 和 `product` 优先使用这个实例。已准备的工作页在采集结束后保留；商品使用同一浏览器中的独立临时标签页，逐商品结束时关闭，避免混淆请求响应。没有先运行 `sogou` 也可以直接采集，此时采集命令自行启动所需服务，退出后保留公共通信服务。
+更新代码后先重启已运行的 `automation.com.extension_bridge` 公共服务，使 Edge 路由生效。
 
-## 榜单流程
+先在对应浏览器的实际用户目录安装/重新加载本仓库 `extension` 插件，并配置相同的公共 WS 地址。Chrome、Edge 默认使用本机安装路径和各自标准用户目录；可通过 `SPIDER_CHROME_EXECUTABLE`、`SPIDER_CHROME_USER_DATA_DIR`、`SPIDER_EDGE_EXECUTABLE`、`SPIDER_EDGE_USER_DATA_DIR` 覆盖。搜狗继续使用原有路径配置。
+
+命令自动启动或复用公共 WS 和对应浏览器，在独立任务窗口跳转榜单。先等待导航完成，再等待商品卡片出现并滚动加载，按标题唯一匹配后写入三个字段。成功后关闭本次任务窗口，其他工作窗口和公共 WS 保留；失败每隔半小时重试，Ctrl+C 停止时保留任务窗口供检查。无可补采产品时不打开窗口。
 
 ### 搜狗浏览器
 
@@ -82,7 +89,7 @@ uv run python -m automation.pdd.spider.sogou
 uv run python -m automation.pdd.spider.ranking
 ```
 
-在搜狗的扩展管理中加载本仓库 `extension` 目录，已有插件需要重新加载至 0.13.0。在搜狗插件配置页把连接地址设为 `ws://127.0.0.1:8765/`，与商家截图共用公共 WS 服务。服务按浏览器分发，搜狗与 Chrome 可同时连接。
+在搜狗的扩展管理中加载本仓库 `extension` 目录，已有插件需要重新加载至 0.13.0。在搜狗插件配置页把连接地址设为 `ws://127.0.0.1:8765/`，与商家截图共用公共 WS 服务。服务按浏览器分发，搜狗、Chrome 与 Edge 可同时连接。
 
 命令优先复用本机插件通信服务和已准备的搜狗，未就绪时才启动浏览器，保留其用户数据。浏览器不带 `--remote-debugging-port`，不使用 Playwright/CDP 连接。程序检查插件 WebSocket 连接对应的进程属于配置的搜狗可执行文件，避免使用其他浏览器中连接的插件。
 
@@ -233,7 +240,7 @@ print(device.app_current())
 旧数据库必须手动执行项目中的 `src/automation/pdd/spider/migrate/20261102115136_rankings_products.sql`，参见 `src/automation/pdd/spider/migrate/README.md`。程序不会自动转换旧数据库；空数据库自动创建六张新表。
 
 
-榜单与商品使用独立流程锁、设备锁和子榜目录锁，允许不同设备在同一业务目录并行；同一设备仍串行。SQLite 使用 WAL 和 30 秒写锁等待，事务只覆盖数据库操作，Excel 保留文件级锁。`sogou` 显式准备的浏览器与插件服务长期保留。采集命令退出只清理自己临时启动的辅助进程，保留复用的浏览器、工作页和外部服务。工具、镜像、签名资料和抓取产物位于业务目录，不进入代码仓库。
+榜单与商品使用独立流程锁、设备锁和子榜目录锁，允许不同设备在同一业务目录并行；同一设备仍串行。SQLite 使用 WAL 和 30 秒写锁等待，事务只覆盖数据库操作，Excel 保留文件级锁。独立网页补采成功后关闭任务窗口，公共插件服务继续保留。采集命令退出只清理自己临时启动的辅助进程，保留复用的浏览器、工作页和外部服务。工具、镜像、签名资料和抓取产物位于业务目录，不进入代码仓库。
 
 旧工作区的历史采集数据保留原处，不会在首次运行时当作新数据库中的已完成任务。来源 Excel 已复制到新业务目录；运行前核对本机搜狗路径、设备连接、开发者模式以及 WDA 安装情况。
 
@@ -375,7 +382,7 @@ uv run python -m automation.pdd.spider --switch-data 2026-11-04 --switch-to 2026
 
 `--refresh` 仅覆盖本次选中榜单的榜单采集数据，即使记录已完成也重新读取最新排名、标题、价格及指标，重新生成图片并实际复制分享链接；不会复用原已完成链接。SKU、详情图和评论由 `product` 命令独立采集。旧参数 `--refresh-media` 已替换为 `--refresh`。
 
-### 手机与搜狗统一采集
+### 手机采集与独立网页补采
 
 ```powershell
 uv run python -m automation.pdd.spider
@@ -406,7 +413,7 @@ uv run python -m automation.pdd.spider --check --ranking-id 12
 
 产品的 `mobile_state`、`sogou_state` 独立保存 pending/running/completed/failed 状态。手机完成后跳过；未完成则按当前 rank 重新采集，替换该排名目录、标题、指标、图片、SKU 和评论，不复用上一轮的产品阶段。完成产品的排名、链接和文件保持不变。WebView 无元素也不算完成，会继续重试。
 
-每轮手机整榜处理后，通过搜狗插件读取一次整榜。只给手机已完成、搜狗未完成且标题在整榜中唯一匹配的记录填写产品 ID、链接和上架日期。网页名次变化时仍保留数据库原 rank；重复标题不写入。网页失败不重采手机；`rankings.web_collected_at` 记录网页尝试时间，满 30 分钟才允许再次访问本榜单。手机未完成项不限重试轮数。手机整榜完成后，即使网页失败也继续下一个榜单；每轮手机采完时，一并重试本次采集范围内此前待补网页、且已满半小时的榜单。哪个榜单两端全部完成，就在 PostgreSQL 标记该榜单完成，无需再次同步。最后一榜手机采完后，等待最早到期的网页待补项继续重试，直到全部完成。Ctrl+C 可停止，下一次继续。
+主命令只执行手机采集，手机未完成项继续重试；手机完成后退出，不打开浏览器，也不等待网页补采。随后手动运行 `.sogou`、`.chrome` 或 `.edge` 补采网页字段。仅当手机与网页两端全部完成时，才将整个榜单标记完成。网页采集按标题唯一匹配；网页名次变化仍保留原 rank，重复标题不写入。`rankings.web_collected_at` 记录网页尝试时间，同一榜单间隔至少 30 分钟重试；失败不重采手机。
 
 PostgreSQL 结构定义在 `mobile_schema.sql`。采集使用原生 PostgreSQL 参数和事务，状态更新立即落库；`--check` 使用只读连接，不初始化或迁移表。
 

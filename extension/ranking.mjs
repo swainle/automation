@@ -149,7 +149,9 @@ export async function rankingOperation(api, action, params) {
     }
   }
   if (action === 'ranking_open') {
-    const tab = await api.tabs.create({url: 'about:blank', active: true});
+    const tab = params.new_window
+      ? (await api.windows.create({url: 'about:blank', focused: true, type: 'normal'})).tabs[0]
+      : await api.tabs.create({url: 'about:blank', active: true});
     const settings = {};
     await api.storage.session.set({rankingTabs: {...await registry(api), [tab.id]: settings}});
     try {

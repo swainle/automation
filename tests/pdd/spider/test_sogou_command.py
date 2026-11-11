@@ -25,16 +25,11 @@ def test_launcher_detaches_only_its_new_bridge_and_keeps_workspace(tmp_path):
         assert runtime.ranking_request.call_count == 3
 
 
-def test_sogou_module_prepares_browser_without_collecting_or_creating_tasks(tmp_path):
+def test_sogou_module_dispatches_web_collection():
     from automation.pdd.spider.sogou import main
-    with patch('sys.argv', ['sogou']), patch.object(config, 'BUSINESS_ROOT', tmp_path), \
-            patch('automation.pdd.spider.runtime.Runtime') as factory, \
-            patch('automation.pdd.spider.sogou.close_existing_sogou', return_value=2) as close:
-        assert main() == 0
-        close.assert_called_once_with()
-        factory.return_value.start_ranking_browser.assert_called_once_with(persistent=True)
-        factory.return_value.close.assert_called_once()
-        assert not (tmp_path / 'data/sqlite.db').exists()
+    with patch('automation.pdd.spider.web.main', return_value=0) as collect:
+        assert main(['--ranking-id', '12']) == 0
+    collect.assert_called_once_with('sogou', ['--ranking-id', '12'])
 
 
 def test_close_sogou_closes_all_instances_and_children_but_not_chrome():
@@ -52,12 +47,3 @@ def test_close_sogou_closes_all_instances_and_children_but_not_chrome():
         process.terminate.assert_called_once_with()
     child.kill.assert_called_once_with()
     chrome.terminate.assert_not_called()
-
-
-def test_failed_sogou_shutdown_prevents_reopening(tmp_path):
-    from automation.pdd.spider.sogou import main
-    with patch('sys.argv', ['sogou']), patch.object(config, 'BUSINESS_ROOT', tmp_path), \
-            patch('automation.pdd.spider.runtime.Runtime') as factory, \
-            patch('automation.pdd.spider.sogou.close_existing_sogou', side_effect=RuntimeError('无法关闭搜狗')):
-        assert main() == 1
-    factory.return_value.start_ranking_browser.assert_not_called()

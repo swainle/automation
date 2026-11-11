@@ -4,6 +4,45 @@ import {allowedRankingPage, rankingDom, rankingOperation} from '../../extension/
 
 import {apiFixture} from './helpers/ranking-fixture.mjs';
 
+test('standalone collection creates and closes its own window tab', async () => {
+  const {api, tabs} = apiFixture();
+  tabs.set(77, {id: 77, windowId: 1, url: 'https://example.com'});
+  let opened;
+  api.windows.create = async params => {
+    opened = params;
+    return {tabs: [await api.tabs.create({url: params.url, windowId: 2})]};
+  };
+  const {tab_id} = await rankingOperation(api, 'ranking_open', {new_window: true});
+  assert.deepEqual(opened, {url: 'about:blank', focused: true, type: 'normal'});
+  assert.equal(tabs.get(tab_id).windowId, 2);
+  await rankingOperation(api, 'ranking_close', {tab_id});
+  assert.equal(tabs.has(tab_id), false);
+  assert.equal(tabs.has(77), true);
+});
+
+test('navigation waits for the new page to finish loading before DOM collection', async () => {
+  const {api, tabs, calls} = apiFixture();
+  const {tab_id} = await rankingOperation(api, 'ranking_open', {});
+  const update = api.tabs.update;
+  api.tabs.update = async (id, params) => {
+    const tab = await update(id, params);
+    tab.status = 'loading';
+    return tab;
+  };
+  const get = api.tabs.get;
+  let reads = 0;
+  api.tabs.get = async id => {
+    const tab = await get(id);
+    if (tab.status === 'loading' && ++reads === 3) tab.status = 'complete';
+    return tab;
+  };
+  await rankingOperation(api, 'ranking_navigate', {tab_id, url: 'https://mobile.yangkeduo.com/rank'});
+  assert.equal(reads, 3);
+  assert.equal(calls.some(call => call[0] === 'dom'), false);
+  await rankingOperation(api, 'ranking_read', {tab_id, load: true});
+  assert.equal(tabs.get(tab_id).status, 'complete');
+});
+
 test('ranking page scope accepts mobile PDD and refuses seller pages and foreign hosts', () => {
   assert.equal(allowedRankingPage('https://mobile.yangkeduo.com/goods_ranking.html'), true);
   assert.equal(allowedRankingPage('https://mobile.pinduoduo.com/rank'), true);

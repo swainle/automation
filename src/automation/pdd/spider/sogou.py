@@ -244,33 +244,9 @@ def log_viewport(page, tag: str = "") -> None:
           f"滚动=({v['scroll']['x']},{v['scroll']['y']})")
 
 
-def main():
-    """关闭所有搜狗实例后重新打开，复用公共 WS 并准备移动视口。"""
-    import argparse
-    from automation.pdd.spider import config
-    from automation.pdd.spider.initialize import initialize
-    from automation.pdd.spider.logging_setup import console_logging
-    from automation.pdd.spider.runtime import Runtime
-    from automation.pdd.spider.concurrency import workflow_lock
-    argparse.ArgumentParser(description=main.__doc__).parse_args()
-    initialize(config.BUSINESS_ROOT)
-    with console_logging(config.BUSINESS_ROOT):
-        runtime = Runtime()
-        try:
-            with workflow_lock('device-browser'):
-                print('[搜狗] 正在关闭所有搜狗窗口和后台进程')
-                count = close_existing_sogou()
-                print(f'[搜狗] 已关闭 {count} 个进程，正在重新初始化')
-                runtime.start_ranking_browser(persistent=True)
-            print(f'[搜狗] 已就绪：窗口 {config.RANKING_WIDTH}×{config.RANKING_HEIGHT} px，移动视口 {config.RANKING_WIDTH}×{config.RANKING_HEIGHT}，标签页缩放 {config.RANKING_SCALE:.0%}；浏览器和插件服务已保留')
-            return 0
-        except KeyboardInterrupt:
-            return 0
-        except Exception as error:
-            print(f'[搜狗] 准备失败：{error}')
-            return 1
-        finally:
-            runtime.close()
+def main(argv=None):
+    from automation.pdd.spider.web import main as collect
+    return collect('sogou', argv)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-"""Collect unfinished mobile products, then supplement them from the web board."""
+"""Collect unfinished mobile products; web supplementation is a separate command."""
 from datetime import datetime
 from pathlib import Path
 import re
@@ -89,10 +89,8 @@ def web_round(store, runtime, entry, product_id=None):
         for item in pending:
             store.db.execute("UPDATE t_pdd_ranking_products SET sogou_state='running' WHERE id=%s", (item['id'],))
     try:
-        from automation.pdd.spider.concurrency import workflow_lock
-        with workflow_lock('device-browser'):
-            _, rows, _ = Sogou(runtime).read({'name': entry['source_name'], 'main_name': entry['main_name'],
-                                             'url': entry['source_url']}, entry, entry['capture_date'])
+        _, rows, _ = Sogou(runtime).read({'name': entry['source_name'], 'main_name': entry['main_name'],
+                                         'url': entry['source_url']}, entry, entry['capture_date'])
         normalize = lambda value: re.sub(r'\s|\u200b', '', value)
         for item in pending:
             matches = [r for r in rows if normalize(r['标题']) == normalize(item['title'])]
@@ -142,7 +140,6 @@ def collect(store, runtime, ranking_id=None, product_id=None):
         if not sources:
             raise ValueError('来源 Excel 没有有效榜单')
         entries = store.seed_rankings(today(), sources, config.OUTPUT_ROOT)
-    pending_web = []
 
     def wait(delay):
         deadline = time.monotonic() + max(1, delay)
@@ -150,24 +147,7 @@ def collect(store, runtime, ranking_id=None, product_id=None):
         while time.monotonic() < deadline:
             time.sleep(min(30, max(0, deadline - time.monotonic())))
 
-    def retry_pending_web():
-        for list_id in list(pending_web):
-            entry = store.list(list_id)
-            if not remaining_web_wait(entry):
-                web_round(store, runtime, entry, product_id)
-            store.export(list_id)
-            items = store.items(list_id)
-            if items and all(i['mobile_state'] == i['sogou_state'] == 'completed' for i in items):
-                store.list_state(list_id, 'completed')
-                pending_web.remove(list_id)
-            elif product_id is not None and all(
-                    i['mobile_state'] == i['sogou_state'] == 'completed' for i in items if i['id'] == product_id):
-                pending_web.remove(list_id)
-            else:
-                store.list_state(list_id, 'pending')
-
     for entry in entries:
-        pending_web.append(entry['id'])
         while True:
             items = store.items(entry['id'])
             targets = [i for i in items if product_id is None or i['id'] == product_id]
@@ -178,13 +158,13 @@ def collect(store, runtime, ranking_id=None, product_id=None):
                     raise
                 except Exception as error:
                     print(f'[手机] 本轮未完成：{error}', flush=True)
-            retry_pending_web()
             items = store.items(entry['id'])
             targets = [i for i in items if product_id is None or i['id'] == product_id]
             if targets and all(i['mobile_state'] == 'completed' for i in targets):
                 break
             wait(config.PRODUCT_RETRY_DELAY)
-    while pending_web:
-        wait(min(remaining_web_wait(store.list(list_id)) for list_id in pending_web))
-        retry_pending_web()
+        store.export(entry['id'])
+        items = store.items(entry['id'])
+        store.list_state(entry['id'], 'completed' if items and all(
+            i['mobile_state'] == i['sogou_state'] == 'completed' for i in items) else 'pending')
     return 0
