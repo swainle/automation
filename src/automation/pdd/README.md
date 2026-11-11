@@ -1,4 +1,8 @@
 ```cmd
+uv run python -m automation.pdd.spider.sogou
+uv run python -m automation.pdd.spider.ranking
+uv run python -m automation.pdd.spider.ranking --ios
+uv run python -m automation.pdd.spider.product
 uv run python -m automation.pdd.screenshot --init
 uv run python -m automation.pdd.screenshot
 uv run python -m automation.pdd.screenshot --once

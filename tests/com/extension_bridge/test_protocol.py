@@ -57,3 +57,22 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_action_is_rejected(self):
         with self.assertRaisesRegex(BridgeError, "unsupported_action"):
             await request(self.endpoint, "execute_javascript")
+
+    async def test_two_browsers_route_requests_and_disconnect_independently(self):
+        async with connect(self.endpoint) as chrome, connect(self.endpoint) as sogou:
+            for browser, socket in [('chrome', chrome), ('sogou', sogou)]:
+                await socket.send(json.dumps({'type': 'hello', 'role': 'extension', 'browser': browser}))
+                self.assertTrue(json.loads(await socket.recv())['ok'])
+            for browser, action, socket in [('chrome', 'tabs', chrome), ('sogou', 'ranking_prepare', sogou)]:
+                self.assertTrue((await request(self.endpoint, 'status', browser=browser))['connected'])
+                task = asyncio.create_task(request(self.endpoint, action))
+                message = json.loads(await asyncio.wait_for(socket.recv(), 2))
+                self.assertEqual(message['action'], action)
+                # The other browser cannot supply a result for this request.
+                other = sogou if socket is chrome else chrome
+                await other.send(json.dumps({'type': 'result', 'id': message['id'], 'ok': True, 'result': 'wrong'}))
+                await socket.send(json.dumps({'type': 'result', 'id': message['id'], 'ok': True, 'result': browser}))
+                self.assertEqual(await task, browser)
+            await sogou.close()
+            self.assertTrue((await request(self.endpoint, 'status', browser='chrome'))['connected'])
+            self.assertFalse((await request(self.endpoint, 'status', browser='sogou'))['connected'])

@@ -75,6 +75,8 @@ def runtime_root(project_root=None):
 
 
 def load_environment(project_root=None):
+    from automation.config import load_environment as load_common_environment
+    load_common_environment(Path.cwd() if project_root is None else project_root)
     root = runtime_root(project_root)
     path = root / ".env"
     if not path.is_file():

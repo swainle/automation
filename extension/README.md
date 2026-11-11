@@ -193,3 +193,29 @@ uv run python tests/pdd/captcha/test_yidun_integration.py
 ```
 
 旧的 tests/pdd/captcha/test_drag.py 仍是 CDP 诊断，不是这次的 WS 易盾实现。
+
+
+## 搜狗榜单采集
+
+在搜狗扩展管理中加载/重新加载本目录，插件版本 0.13.0；配置页连接地址使用 `ws://127.0.0.1:8765/`。
+运行 `uv run python -m automation.pdd.spider.ranking` 后，由 Python 管理本机通信服务，插件负责读取榜单元素、滚动和截图。
+浏览器窗口、视口和缩放由用户手动设置，插件不再修改。没有浏览器远程调试端口，设备模拟使用扩展自身的 debugger 权限。
+`ranking_open`、`ranking_navigate`、`ranking_read`、`ranking_screenshot`、`ranking_close` 仅操作插件创建并登记的榜单标签页；商家工作台动作的页面范围保持独立。
+手机模式使用 `uv run python -m automation.pdd.spider.ranking --ios`，不需要此插件。
+
+
+先运行 `uv run python -m automation.pdd.spider.sogou` 可准备并保留搜狗、移动视口和插件服务；后续 ranking/product 优先复用。
+商品通过 `product_open` 在导航前启用扩展 Network 监听，`product_dom` 仅允许固定元素操作；`product_network` 按商品标签页和评价请求阶段隔离响应，`product_close` 只关闭此商品临时页。
+无需任何浏览器远程调试端口，浏览器扩展需要重新加载至 0.13.0。
+
+## 公共 WS 配置
+
+可先在 automation 项目根目录的独立终端运行公共服务：
+
+```powershell
+uv run python -m automation.com.extension_bridge
+```
+
+保持该终端运行，再在其他终端执行 `automation.pdd.spider.sogou`、`automation.pdd.spider.ranking`、`automation.pdd.spider.product` 或 `automation.pdd.screenshot`。这些功能优先复用已有公共服务，不会重复启动，也不会在退出时关闭该服务；没有服务时自动启动后台服务。手动运行的服务使用 Ctrl+C 停止。
+
+在 automation 项目根目录 `.env` 设置 `AUTOMATION_WS_PORT=8765`。搜狗与截图共用该服务，插件连接地址保持一致。服务按 Chrome／搜狗分发请求，已有服务优先复用，业务退出后保留公共 WS。更新代码后重启旧版 bridge，并重新加载两个浏览器的插件。

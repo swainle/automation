@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 ROOT = Path.cwd().resolve()
 
 
-def load_environment():
-    load_dotenv(ROOT / ".env")
+def load_environment(root=None):
+    load_dotenv((ROOT if root is None else Path(root)) / ".env")
 
 
 def env_bool(name, default=False):

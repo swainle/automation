@@ -5,6 +5,8 @@ import {openStoragePage, storageOperation} from "./local-storage.mjs";
 import {tabOperation, resetState, shopIdentity, closeTaskTabs} from "./automation.mjs";
 import {receivableOperation} from "./receivable.mjs";
 import {screenshotUiOperation} from "./screenshot-ui.mjs";
+import {rankingOperation} from "./ranking.mjs";
+import {productOperation, productNetworkEvent} from "./product.mjs";
 
 let socket = null;
 let heartbeat = null;
@@ -86,6 +88,12 @@ async function screenshot(tab, params) {
 async function execute(message) {
   if (!message || typeof message.id !== "string" || message.id.length > 100) throw new Error("invalid_request");
   const params = message.params || {};
+  if (["product_open", "product_close", "product_dom", "product_network", "product_reviews_begin", "product_screenshot"].includes(message.action)) {
+    return await productOperation(chrome, message.action, params);
+  }
+  if (["ranking_prepare", "ranking_open", "ranking_close", "ranking_navigate", "ranking_read", "ranking_screenshot"].includes(message.action)) {
+    return await rankingOperation(chrome, message.action, params);
+  }
   if (["screenshot_prepare", "screenshot_restore"].includes(message.action)) return await screenshotUiOperation(chrome, message.action, params);
   if (["tab_create", "tab_navigate", "tab_close"].includes(message.action)) return await tabOperation(chrome, message.action, params);
   if (message.action === "automation_tabs_close") return await closeTaskTabs(chrome);
@@ -160,7 +168,7 @@ async function connect() {
   catch { await status("连接地址无效，仅允许 127.0.0.1"); return; }
   const ws = new WebSocket(endpoint);
   socket = ws;
-  ws.onopen = () => ws.send(JSON.stringify({type: "hello", role: "extension"}));
+  ws.onopen = () => ws.send(JSON.stringify({type: "hello", role: "extension", browser: /MetaSr|Sogou/i.test(navigator.userAgent) ? "sogou" : "chrome"}));
   ws.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
@@ -196,6 +204,7 @@ async function connect() {
 }
 
 chrome.action.onClicked.addListener(() => { void chrome.runtime.openOptionsPage(); });
+chrome.debugger.onEvent.addListener((source, method, params) => { void productNetworkEvent(chrome, source, method, params); });
 chrome.runtime.onInstalled.addListener(() => { void connect(); });
 chrome.runtime.onStartup.addListener(() => { void connect(); });
 chrome.storage.onChanged.addListener((changes, area) => {

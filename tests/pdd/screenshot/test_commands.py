@@ -28,7 +28,7 @@ def test_runtime_paths_and_business_environment(tmp_path, monkeypatch):
         assert config.db_path == business / "state/sqlite.db"
         assert config.cs_dir == business / "inputs/cookies"
         assert config.ssh_key == str(business / "keys/id_ed25519")
-        assert config.ws_port == 9001
+        assert config.ws_port == 9999  # Shared project configuration takes priority.
         assert os.environ["PDD_SCREENSHOT_ONCE"] == "true"
     with patch.dict(os.environ, {"AUTOMATION_WS_PORT": "9002"}, clear=True):
         assert Config.load().ws_port == 9002
@@ -150,7 +150,7 @@ def test_business_cookie_server_missing_config_does_not_start(tmp_path, monkeypa
         serve.assert_not_called()
 
 
-def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatch, capsys):
+def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatch, capsys, caplog):
     import importlib
     from automation.pdd.screenshot import main
     from automation.pdd.screenshot.services import InfrastructureError
@@ -166,7 +166,7 @@ def test_main_reports_failure_after_report_module_is_loaded(tmp_path, monkeypatc
         "automation.pdd.screenshot.runtime.run_interruptible", side_effect=fail
     ):
         assert main() == 1
-    assert "remote_cs_exited" in capsys.readouterr().out
+    assert "remote_cs_exited" in capsys.readouterr().out + caplog.text
 
 
 def test_business_cookie_remote_mode_uses_supervisor(tmp_path, monkeypatch):

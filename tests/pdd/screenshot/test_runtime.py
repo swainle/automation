@@ -19,6 +19,22 @@ from automation.com.extension_bridge import BridgeError
 
 
 class BrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_ws_is_reused_and_not_owned(self):
+        services = Services(Config(root=Path.cwd()))
+        services.spawn = Mock()
+        services.wait_ready = AsyncMock()
+        with patch('automation.pdd.screenshot.services.port_free', side_effect=[False, True]), patch(
+            'automation.pdd.screenshot.services.request', new=AsyncMock(return_value={'protocol': 3})
+        ), patch('automation.pdd.screenshot.services.subprocess.Popen') as spawn, patch(
+            'automation.pdd.screenshot.services.close_existing_chrome', return_value=0
+        ), patch('automation.pdd.screenshot.services.prepare_default_profile', return_value={'profile': 'Default', 'backup': None}), patch(
+            'automation.pdd.screenshot.services.launch_chrome'
+        ):
+            await services.start()
+        spawn.assert_not_called()
+        self.assertFalse(services.processes)
+        self.assertEqual(services.spawn.call_count, 1)  # Only the Cookie server.
+
     async def test_default_launch_has_no_user_directory_and_exited_launcher_is_healthy(self):
         with tempfile.TemporaryDirectory() as folder:
             config = Config(root=Path(folder))
@@ -31,7 +47,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 "automation.pdd.screenshot.services.prepare_default_profile", return_value={"profile": "Default", "backup": None}
             ), patch("automation.pdd.screenshot.services.port_free", return_value=True), patch(
                 "automation.pdd.screenshot.services.launch_chrome", return_value=browser
-            ) as launch:
+            ) as launch, patch("automation.pdd.screenshot.services.subprocess.Popen"):
                 await services.start()
             launch.assert_called_once_with(url="about:blank", quiet_startup=True)
             close_chrome.assert_called_once()

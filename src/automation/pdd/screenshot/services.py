@@ -155,8 +155,16 @@ class Services:
 
     async def start(self):
         cfg = self.config
-        if not port_free(cfg.ws_port):
-            raise StartupError("WS 端口已占用；请停止单独启动的 bridge，或配置 AUTOMATION_WS_PORT 并修改插件连接地址")
+        reuse_ws = not port_free(cfg.ws_port)
+        if reuse_ws:
+            try:
+                status = await request(cfg.endpoint, 'status')
+                if status.get('protocol') != 3:
+                    raise StartupError('公共 WS 服务版本过旧，请重启 extension_bridge')
+            except StartupError:
+                raise
+            except Exception as error:
+                raise StartupError('公共 WS 端口被非兼容服务占用，请检查项目 .env 的 AUTOMATION_WS_PORT') from error
         if not cfg.ssh_host and not port_free(cfg.cs_port):
             raise StartupError("CS 端口已占用；请停止已有 CS，或配置其他 COOKIES_SERVER_PORT")
         if cfg.ssh_host:
@@ -168,10 +176,19 @@ class Services:
         async def cs_ready():
             return await blocking(lambda: http_ready(self.cs_base, startup=True))
         await self.wait_ready(cs_ready, "cs")
-        self.spawn("automation.com.extension_bridge", "--port", str(cfg.ws_port))
+        if reuse_ws:
+            log('管理', f'复用公共 WS 服务：{cfg.endpoint}')
+        else:
+            log_path = cfg.project_root / 'logs/extension-bridge.log'
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open('ab') as output:
+                subprocess.Popen([sys.executable, '-u', '-m', 'automation.com.extension_bridge', '--port', str(cfg.ws_port)],
+                                 cwd=cfg.project_root, env=dict(os.environ, PYTHONIOENCODING='utf-8'),
+                                 stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                 start_new_session=os.name != 'nt',
+                                 creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0)
         async def ws_ready():
-            await request(cfg.endpoint, "status")
-            return True
+            return (await request(cfg.endpoint, "status")).get('protocol') == 3
         await self.wait_ready(ws_ready, "ws")
         log("浏览器", "正在关闭现有 Chrome 窗口及后台进程")
         try:

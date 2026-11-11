@@ -6,7 +6,7 @@
   <p>连接本机 Python，获取拼多多页面元素和截图。</p>
   <form id="config">
     <label for="endpoint">本机服务地址</label><input id="endpoint" type="url" value="ws://127.0.0.1:8765/" required>
-    <p class="hint">默认自动连接本机服务，无需 Token。通常不需要修改地址。</p>
+    <p class="hint">商家截图使用 8765；搜狗榜单请设置为 ws://127.0.0.1:8766/。无需 Token。</p>
     <button type="submit">保存并连接</button>
   </form>
   <p id="message" role="status"></p><p>连接状态：<strong id="status">读取中</strong></p>
