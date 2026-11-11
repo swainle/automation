@@ -535,10 +535,13 @@ def test_viewer_page_retries_only_unadvanced_page(positions, expected_error):
 
 
 @pytest.mark.parametrize('image_top', [241, 50])
-def test_sku_viewer_uses_safe_exit_if_picture_tap_does_not_close(image_top):
+@pytest.mark.parametrize('counter', [True, False])
+def test_sku_viewer_uses_safe_exit_if_picture_tap_does_not_close(image_top, counter):
     from unittest.mock import Mock, patch
     from automation.pdd.spider.ios_product import IosProduct
     viewer = ET.fromstring(f'<App><XCUIElementTypeImage visible="true" x="0" y="{image_top}" width="414" height="414"/><XCUIElementTypeStaticText name="1/1" visible="true"/></App>')
+    if not counter:
+        viewer.remove(viewer[-1])
     panel = ET.fromstring('<App><XCUIElementTypeButton name="增加数量" visible="true"/></App>')
     collector = IosProduct(Mock(), Mock())
     collector.root, collector.width, collector.height = viewer, 414, 896

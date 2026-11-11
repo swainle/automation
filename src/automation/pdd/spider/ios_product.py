@@ -285,7 +285,6 @@ class IosProduct:
             self.tap(buttons[0])
         self.snapshot()
         if sku and self.find(r'^增加数量$', kind='Button') is None:
-            self.viewer_counter()
             image_top = rect(self.viewer_image())[1]
             if image_top > 130:
                 self.client.click(round(self.width / 2), round((100 + image_top) / 2))
@@ -300,13 +299,9 @@ class IosProduct:
         self.tap(thumbnail)
         self.snapshot()
         try:
-            try:
-                self.viewer_counter()
-            except RuntimeError:
-                # The panel already verified specs and price before opening its
-                # thumbnail. A sole SKU cannot be confused with another variant.
-                if math.prod(len(options) for options in self.sku_catalog.values()) != 1:
-                    gallery_sku(self.root, self.sku_catalog, self.width)
+            # The panel verified specs and price; its selected image may have no counter or text.
+            if self.find(r'^增加数量$', kind='Button') is not None:
+                raise RuntimeError('未进入 SKU 大图浏览器，未保存图片')
             self.image(self.viewer_image(), path)
         finally:
             self.close_viewer(sku=True)

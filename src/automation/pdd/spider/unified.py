@@ -30,10 +30,9 @@ def reset_mobile(store, item, row):
     metrics = from_row(row)
     fields = dict(title=row['标题'], **{k: metrics.get(k) for k in FIELDS})
     fields.update({column: 'pending' for column in (
-        'rank_state', 'product_state', 'mobile_state', 'sogou_state',
+        'rank_state', 'product_state', 'mobile_state',
         'product_screenshot_state', 'main_images_state', 'sku_state', 'detail_images_state', 'comments_state')})
-    fields.update(platform_product_id='', platform_product_link='', listing_date=None,
-                  collected_at=None, last_stage='', last_error='')
+    fields.update(collected_at=None, last_stage='', last_error='')
     with store.db.transaction():
         for table in ('t_pdd_product_skus', 't_pdd_product_main_images', 't_pdd_products_detail_image', 't_pdd_product_comments'):
             store.db.execute(f'DELETE FROM {table} WHERE ranking_product_id=%s', (item['id'],))
@@ -78,8 +77,8 @@ def mobile_round(store, runtime, entry, product_id=None):
 
 def web_round(store, runtime, entry, product_id=None):
     from automation.pdd.spider.devices import Sogou
-    pending = [i for i in store.items(entry['id']) if i['mobile_state'] == 'completed'
-               and i['sogou_state'] != 'completed' and (product_id is None or i['id'] == product_id)]
+    pending = [i for i in store.items(entry['id']) if i['sogou_state'] != 'completed'
+               and (product_id is None or i['id'] == product_id)]
     if not pending:
         return
     if remaining_web_wait(entry):

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
+from contextlib import nullcontext
 
 import pytest
 
@@ -63,13 +64,17 @@ def test_web_retries_after_cooldown_and_retains_window_on_interrupt(task, monkey
     assert runtime._ranking_keep_open
 
 
-def test_no_mobile_completed_products_does_not_access_web(task, monkeypatch):
+def test_web_collects_before_mobile_without_changing_mobile_state(task, monkeypatch):
     store, item = task
     item['mobile_state'] = 'pending'
-    read = Mock()
+    def finish(*args):
+        item['sogou_state'] = 'completed'
+    read = Mock(side_effect=finish)
     monkeypatch.setattr(web, 'web_round', read)
     assert web.collect(store, Runtime(), ranking_id=1) == 0
-    read.assert_not_called()
+    read.assert_called_once()
+    assert item['mobile_state'] == 'pending'
+    store.list_state.assert_called_once_with(1, 'pending')
 
 
 @pytest.mark.parametrize('browser', ['sogou', 'chrome', 'edge'])
@@ -134,3 +139,41 @@ def test_launcher_uses_selected_browser_and_an_independent_window(browser, tmp_p
     assert launch.call_args.args[0] == [str(executable), f'--user-data-dir={tmp_path / "profile"}', '--no-startup-window']
     runtime.ranking_request.assert_called_with('ranking_open', {'reuse_workspace': False, 'new_window': True})
     assert runtime._ranking_keep_open
+
+
+def test_mobile_retry_preserves_web_fields_and_state(tmp_path, monkeypatch):
+    from automation.pdd.spider import config
+    monkeypatch.setattr(config, 'OUTPUT_ROOT', tmp_path)
+    directory = tmp_path / 'board/2026-11-11'
+    folder = directory / '榜01'
+    folder.mkdir(parents=True)
+    (folder / 'old.jpg').write_bytes(b'old')
+    item = dict(id=2, ranking_id=1, rank=1, directory=str(folder), title='产品', mobile_state='failed',
+                sogou_state='completed', platform_product_id='123', platform_product_link='keep-link', listing_date='2026-11-01')
+    store = Mock()
+    store.list.return_value = {'directory': str(directory)}
+    store.db.transaction.side_effect = nullcontext
+    def execute(sql, values):
+        if sql.startswith('UPDATE t_pdd_ranking_products SET '):
+            fields = sql.split(' SET ', 1)[1].split(' WHERE ', 1)[0].split(',')
+            item.update((field.split('=')[0], value) for field, value in zip(fields, values))
+    store.db.execute.side_effect = execute
+    unified.reset_mobile(store, item, {'排行': 1, '标题': '产品'})
+    assert item['mobile_state'] == 'pending'
+    assert (item['sogou_state'], item['platform_product_id'], item['platform_product_link'],
+            item['listing_date']) == ('completed', '123', 'keep-link', '2026-11-01')
+    assert not list(folder.iterdir())
+
+
+def test_web_round_updates_only_web_fields_when_mobile_failed(monkeypatch):
+    store = Mock()
+    store.items.return_value = [dict(id=2, title='产品', mobile_state='failed', sogou_state='pending')]
+    store.db.transaction.side_effect = nullcontext
+    monkeypatch.setattr('automation.pdd.spider.devices.Sogou.read', Mock(return_value=([], [
+        {'标题': '产品', '产品ID': '123', '产品链接': 'keep-link', '上架日期': '2026-11-01'}], None)))
+    entry = dict(id=1, source_name='榜单', main_name='榜单', source_url='url', capture_date='2026-11-11', web_collected_at=None)
+    unified.web_round(store, Mock(), entry)
+    queries = [call.args[0] for call in store.db.execute.call_args_list]
+    assert any("sogou_state='completed'" in query for query in queries)
+    assert all(not any(field in query for field in ('mobile_state=', 'sku_state=', 'main_images_state=',
+                                                  'detail_images_state=', 'comments_state=', 'DELETE FROM')) for query in queries)

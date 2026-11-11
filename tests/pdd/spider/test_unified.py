@@ -90,11 +90,16 @@ def test_reset_removes_old_files_and_child_rows(board):
     folder.mkdir(parents=True)
     (folder / 'old.jpg').write_bytes(b'old')
     store.save_product_image(item['id'], {'image_type': 'main', 'position': 1, 'local_path': 'old.jpg'})
+    with store.db.transaction():
+        store.db.execute("""UPDATE t_pdd_ranking_products SET sogou_state='completed',
+            platform_product_id='123',platform_product_link='keep-link',listing_date='2026-11-01' WHERE id=%s""", (item['id'],))
     unified.reset_mobile(store, item, {'排行': 1, '标题': '新产品'})
     refreshed = store.item(item['id'])
     assert refreshed['title'] == '新产品'
     assert not list(folder.iterdir())
     assert not store.db.execute('SELECT 1 FROM t_pdd_product_main_images').fetchone()
+    assert (refreshed['sogou_state'], refreshed['platform_product_id'], refreshed['platform_product_link'],
+            refreshed['listing_date']) == ('completed', '123', 'keep-link', '2026-11-01')
 
 
 def test_product_filter_does_not_run_mobile_when_only_web_pending(board, monkeypatch):

@@ -49,15 +49,15 @@ def collect(store, runtime, ranking_id=None, product_id=None):
         waiting = []
         for entry in pending:
             entry = store.list(entry['id'])
-            targets = [item for item in store.items(entry['id']) if item['mobile_state'] == 'completed'
-                       and item['sogou_state'] != 'completed' and (product_id is None or item['id'] == product_id)]
+            targets = [item for item in store.items(entry['id']) if item['sogou_state'] != 'completed'
+                       and (product_id is None or item['id'] == product_id)]
             if targets:
                 web_round(store, runtime, entry, product_id)
                 store.export(entry['id'])
             items = store.items(entry['id'])
             complete = items and all(i['mobile_state'] == i['sogou_state'] == 'completed' for i in items)
             store.list_state(entry['id'], 'completed' if complete else 'pending')
-            if any(i['mobile_state'] == 'completed' and i['sogou_state'] != 'completed'
+            if any(i['sogou_state'] != 'completed'
                    and (product_id is None or i['id'] == product_id) for i in items):
                 waiting.append(store.list(entry['id']))
         pending = waiting
