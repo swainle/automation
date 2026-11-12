@@ -1102,8 +1102,29 @@ _WINDOW_SIZE_CACHE = None
 
 def require_pdd_foreground(client):
     from automation.pdd.spider.workflow import FatalWorkflowError
-    if client.http.get('/wda/activeAppInfo', timeout=3).value.get('bundleId') != PDD_BUNDLE_ID:
-        raise FatalWorkflowError('拼多多已不在前台，已停止截图和点击；请手动回到榜单后重试')
+    info = client.http.get('/wda/activeAppInfo', timeout=3).value
+    bundle = info.get('bundleId')
+    if bundle == PDD_BUNDLE_ID:
+        return
+    # 来电/系统弹窗/锁屏可能把拼多多挤到后台：先尝试恢复一次，避免整轮白白中断。
+    print(f'[ios] 拼多多已不在前台（当前 {bundle or "未知"}），尝试恢复前台...')
+    try:
+        try:
+            if client.locked():
+                print('[ios] 设备已锁屏，先解锁再恢复...')
+                client.unlock()
+                time.sleep(1)
+        except Exception as wake_error:
+            print(f'[ios] 解锁检查/解锁失败（继续尝试恢复前台）：{wake_error}')
+        _restore_foreground(client, PDD_BUNDLE_ID)
+    except Exception as error:
+        raise FatalWorkflowError(
+            f'拼多多已不在前台（当前 {bundle or "未知"}），恢复失败：{error}；请手动回到榜单后重试') from error
+    info = client.http.get('/wda/activeAppInfo', timeout=3).value
+    if info.get('bundleId') != PDD_BUNDLE_ID:
+        raise FatalWorkflowError(
+            f'拼多多已不在前台（当前 {bundle or "未知"}），恢复后仍为 {info.get("bundleId") or "未知"}；请手动回到榜单后重试')
+    print('[ios] 已恢复拼多多前台，继续')
 
 
 def _get_window_size(client):

@@ -197,7 +197,8 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                 print(f"[商品] 排行 {item['rank']}：打开商品页", flush=True)
                 element.tap()
                 # 部分商品页打开后会自动弹出 SKU 面板，遮挡分享/返回等控件，
-                # 需先关闭 SKU 面板再校验页面就绪，否则会一直等满 120 秒超时。
+                # 需先关闭 SKU 面板再校验页面就绪；重商品页（如冻干主粮）加载
+                # 元素树可能超过 120 秒，因此给足 180 秒等待。
                 def page_ready(source):
                     try:
                         dismiss_sku_panel(client)
@@ -205,7 +206,7 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                         pass
                     return not product_page_checks(source, title)[0]
                 xml = wait_for_elements(lambda: ios._current_page_source(client),
-                                        timeout=120,
+                                        timeout=180,
                                         ready=page_ready)
                 reasons, page = product_page_checks(xml, title)
                 if reasons:

@@ -230,7 +230,8 @@ class IosProduct:
             match = re.fullmatch(r'(\d+)\s*/\s*(\d+)', label(node))
             if visible(node) and match:
                 return int(match[1]), int(match[2])
-        raise RuntimeError('未确认放大图片浏览器页码')
+        texts = [label(n) for n in self.root.iter('XCUIElementTypeStaticText') if visible(n) and label(n)]
+        raise RuntimeError(f'未确认放大图片浏览器页码；可见文本：{texts[:60]}')
 
     def wait_viewer_page(self, previous, expected, total):
         for attempt in range(3):
@@ -741,7 +742,23 @@ class IosProduct:
         self.client.click(round((x1 + x2) / 2), round(min(max(y1, 125) + 60, y2 - 1, self.height - 100)))
         time.sleep(.5)
         self.snapshot()
-        position, total = self.viewer_counter()
+        try:
+            position, total = self.viewer_counter()
+        except RuntimeError:
+            # 部分商品详情为文字/规格说明（品牌故事+规格参数），没有可放大的详情图片；
+            # 点击缩略图后仍在商品详情页（无 N/M 页码）。重读两次确认后按无详情图完成。
+            position = None
+            for _ in range(2):
+                time.sleep(.6)
+                self.snapshot()
+                try:
+                    position, total = self.viewer_counter()
+                    break
+                except RuntimeError:
+                    continue
+            if position is None:
+                print('[iOS 商品] 详情无放大图片浏览器（文字/规格详情），跳过详情图片采集')
+                return
         seen = set()
         try:
             for _ in range(total):
