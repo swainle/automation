@@ -8,7 +8,7 @@ uv run python -m automation.pdd.spider --check
 uv run python -m automation.pdd.spider
 ```
 
-当前统一入口使用 PostgreSQL 作为唯一数据源：数据库 `pdd`、命名空间 `spider`，所有表使用 `t_pdd_` 前缀。连接只配置在业务目录 `.env` 的 `SPIDER_POSTGRES_URL`，不在源码中保存凭据。SQLite 和原 PostgreSQL 库仅保留迁移备份，采集不会回退到 SQLite。旧独立 `ranking`/`product` 流程与当前每周结构不兼容，使用统一入口及 ID 筛选。
+当前统一入口使用 PostgreSQL 作为唯一数据源：数据库 `test`、命名空间 `ods`，所有表使用 `t_pdd_` 前缀。连接只配置在业务目录 `.env` 的 `SPIDER_POSTGRES_URL`，不在源码中保存凭据。SQLite 和原 PostgreSQL 库仅保留迁移备份，采集不会回退到 SQLite。旧独立 `ranking`/`product` 流程与当前每周结构不兼容，使用统一入口及 ID 筛选。
 
 操作日志在执行前立即输出动作，完成后在同一行追加结果与一位小数的耗时，再换行，例如：
 
@@ -350,7 +350,7 @@ uv run python -m automation.pdd.spider.product --android --jump 'https://mobile.
 
 手机需安装 Google Chrome 并允许 USB 调试。命令复用现有 ADB / UiAutomator，临时转发 Chrome 调试端口，在新标签页打开链接；识别浏览器打开 App 的确认框、网页“打开拼多多APP”和“在App打开”入口，确认拼多多进入前台后结束，不启动榜单队列或完整商品采集。网页文档、XHR / fetch 响应与页面状态保存在 `data/grab/pdd/网页调试/时间/`，包含 `网页.html`、`页面数据.json`、`网络记录.json`、`responses/`、`跳转操作.json` 和 `结果.json`。结果区分网页原始数据与 App 控件读取的数据；不能用分享时间、接口服务器时间冒充上架时间。Chrome 未登录时可能只取得登录页和登录相关响应。结束后仅移除本次临时 Chrome 转发，保留浏览器、App 和共享 UiAutomator 服务。
 
-统一采集直接写入 PostgreSQL；手机、网页状态、图片路径、SKU 和评论都在 `spider.t_pdd_*` 中实时保存。设备与任务锁仍使用业务目录的本地锁文件。
+统一采集直接写入 PostgreSQL；手机、网页状态、图片路径、SKU 和评论都在 `ods.t_pdd_*` 中实时保存。设备与任务锁仍使用业务目录的本地锁文件。
 
 一条命令运行完整手机流程（仅需要 iOS 设备）：
 
@@ -448,16 +448,16 @@ iOS 差评逐条点击该评论的原生“菜单”元素，避免评论图片�
 
 ### PostgreSQL 唯一数据源
 
-业务 `.env` 必须设置 `SPIDER_POSTGRES_URL`，连接数据库 `pdd`。表固定为：
+业务 `.env` 必须设置 `SPIDER_POSTGRES_URL`，连接数据库 `test`。表固定为：
 
 ```text
-spider.t_pdd_rankings
-spider.t_pdd_ranking_products
-spider.t_pdd_product_skus
-spider.t_pdd_product_main_images
-spider.t_pdd_products_detail_image
-spider.t_pdd_product_comments
-spider.t_pdd_selling_point
+ods.t_pdd_rankings
+ods.t_pdd_ranking_products
+ods.t_pdd_product_skus
+ods.t_pdd_product_main_images
+ods.t_pdd_products_detail_image
+ods.t_pdd_product_comments
+ods.t_pdd_selling_point
 ```
 
 图片仍保存在原业务目录，数据库保留相对 `data/` 的路径。原 SQLite 的榜单和产品 ID 保持不变，ID 筛选指令可继续使用。采集不再执行二次同步，`automation.pdd.spider.postgres` 指令已移除。
@@ -465,3 +465,8 @@ spider.t_pdd_selling_point
 一次性迁移逻辑在 `migrate_to_postgres.py`：读取已备份的 SQLite 和旧 PostgreSQL JSON，按榜单与排名关联；已有位置使用最新 SQLite 整套产品数据，旧 PostgreSQL 独有记录补入并重映射外键，不拼接已换产品的旧图片、SKU 或评论。迁移在单个事务中完成，提交前逐字段核对，失败回滚；目标已有不同数据时拒绝覆盖。历史数据库和备份不删除。
 
 PostgreSQL 集成测试使用独立的 `pdd_spider_test_*` 数据库，通过 `PDD_TEST_POSTGRES_URL` 指定；测试会清空该测试库的采集表，禁止指向正式库。
+
+
+卖点表 `ods.t_pdd_selling_point` 按上榜产品记录关联：`ranking_product_id` 外键指向产品，`point_type` 为 `main`（主卖点）、`secondary`（副卖点）或 `pain`（痛点），`content` 保存非空内容；一条卖点一行。`created_at`、`updated_at` 使用 `timestamptz`，插入时默认当前时间，更新时由该表触发器刷新 `updated_at`。手机、网页重采不会清空卖点。
+
+PostgreSQL 驱动通过固定的 `search_path=ods` 设置 schema；`SPIDER_POSTGRES_URL` 使用标准连接串，不附加 `?schema=ods`。连接时区为 `Asia/Shanghai`。采集程序只使用 `ods.t_pdd_*` 表，不执行数据迁移或覆盖已复制记录。

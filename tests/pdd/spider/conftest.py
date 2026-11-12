@@ -22,8 +22,8 @@ def pg_database(tmp_path, monkeypatch):
     try:
         if not store.db.info.dbname.startswith('pdd_spider_test_'):
             raise ValueError('Tests require an isolated pdd_spider_test_* database')
-        store.db.execute(sql.SQL('TRUNCATE {} RESTART IDENTITY CASCADE').format(
-            sql.SQL(',').join(sql.Identifier('spider', table) for table in TABLES)))
+        store.db.execute(sql.SQL('TRUNCATE {} RESTART IDENTITY').format(
+            sql.SQL(',').join(sql.Identifier('ods', table) for table in TABLES)))
     finally:
         store.close()
     return dsn

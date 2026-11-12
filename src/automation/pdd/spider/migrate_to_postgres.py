@@ -44,15 +44,9 @@ def merge(latest, legacy):
             mapping[source['id']] = index[identity]
     for table in (name.removeprefix('t_pdd_') for name in TABLES[2:]):
         next_id = max((row['id'] for row in result[table]), default=0)
-        points = {tuple(row[key] for key in ('主卖点', '副卖点', '痛点')) for row in result[table]} if table == 'selling_point' else set()
         for source in legacy.get(table, []):
             row = dict(source)
-            if table == 'selling_point':
-                key = tuple(row[key] for key in ('主卖点', '副卖点', '痛点'))
-                if key in points:
-                    continue
-                points.add(key)
-            elif row['ranking_product_id'] not in imported_products:
+            if row['ranking_product_id'] not in imported_products:
                 # A position may now belong to another product: keep its latest whole capture.
                 continue
             else:
@@ -80,9 +74,9 @@ def migrate(sqlite_path, legacy_backup, dsn):
     try:
         with store.db.transaction():
             store.db.execute(sql.SQL('LOCK TABLE {} IN EXCLUSIVE MODE').format(
-                sql.SQL(',').join(sql.Identifier('spider', table) for table in TABLES)))
+                sql.SQL(',').join(sql.Identifier('ods', table) for table in TABLES)))
             existing = {table: store.db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(
-                sql.Identifier('spider', table))).fetchall() for table in TABLES}
+                sql.Identifier('ods', table))).fetchall() for table in TABLES}
             if any(existing.values()):
                 if all(existing[table] == sorted(rows[table.removeprefix('t_pdd_')], key=lambda row: row['id']) for table in TABLES):
                     return {table: len(existing[table]) for table in TABLES}
@@ -95,15 +89,15 @@ def migrate(sqlite_path, legacy_backup, dsn):
                         raise ValueError(f'{table} 存在未支持字段，未迁移')
                     fields = list(row)
                     store.db.execute(sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(
-                        sql.Identifier('spider', table), sql.SQL(',').join(map(sql.Identifier, fields)),
+                        sql.Identifier('ods', table), sql.SQL(',').join(map(sql.Identifier, fields)),
                         sql.SQL(',').join(sql.Placeholder() for _ in fields)), list(row.values()))
-                actual = store.db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(sql.Identifier('spider', table))).fetchall()
+                actual = store.db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(sql.Identifier('ods', table))).fetchall()
                 if actual != sorted(values, key=lambda row: row['id']):
                     raise ValueError(f'{table} 迁移后逐字段核对失败，已回滚')
             for table in TABLES:
                 values = rows[table.removeprefix('t_pdd_')]
                 store.db.execute('SELECT setval(pg_get_serial_sequence(%s,%s),%s,%s)',
-                    ('spider.' + table, 'id', max((row['id'] for row in values), default=1), bool(values)))
+                    ('ods.' + table, 'id', max((row['id'] for row in values), default=1), bool(values)))
         return {table: len(rows[table.removeprefix('t_pdd_')]) for table in TABLES}
     finally:
         store.close()

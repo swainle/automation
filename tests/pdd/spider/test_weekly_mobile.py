@@ -69,7 +69,7 @@ def test_schema_and_normalized_details_roundtrip(tmp_path):
                 'raw_json', 'link_state', 'info_state', 'negative_comments_state', 'stages_json'} & columns('t_pdd_ranking_products')
     assert not {'sku_id', 'stock', 'available', 'image', 'raw_json'} & columns('t_pdd_product_skus')
     assert not {'comment_id', 'rating', 'is_negative', 'tags_json', 'media_json', 'raw_json'} & columns('t_pdd_product_comments')
-    assert not store.db.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='spider' AND table_name='product_images'").fetchone()
+    assert not store.db.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='ods' AND table_name='product_images'").fetchone()
     for kind in ('main', 'detail'):
         store.save_product_image(item['id'], {'image_type': kind, 'position': 1, 'local_path': f'{kind}/1.jpg'})
     details = {'sku': [{'SPU1': '鸡肉', 'price': '19.9', '图片路径': 'SKU/1.jpg'}],

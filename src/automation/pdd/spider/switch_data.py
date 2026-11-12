@@ -58,7 +58,7 @@ def switch_data(dsn, source, target):
     try:
         with db.transaction():
             db.execute(sql.SQL('LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE').format(
-                sql.SQL(',').join(sql.Identifier('spider', table) for table in TABLES)))
+                sql.SQL(',').join(sql.Identifier('ods', table) for table in TABLES)))
             count = db.execute('SELECT count(*) AS count FROM t_pdd_rankings WHERE capture_date=%s', (source,)).fetchone()['count']
             if not count:
                 raise ValueError(f'{source} 没有采集数据')
@@ -85,15 +85,15 @@ def switch_data(dsn, source, target):
             backup = config.BUSINESS_ROOT / 'data/backups' / ('before-switch-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.json')
             backup.parent.mkdir(parents=True, exist_ok=True)
             snapshot = {table: db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(
-                sql.Identifier('spider', table))).fetchall() for table in TABLES}
+                sql.Identifier('ods', table))).fetchall() for table in TABLES}
             with backup.open('x', encoding='utf-8') as stream:
-                json.dump(snapshot, stream, ensure_ascii=False, indent=2)
+                json.dump(snapshot, stream, ensure_ascii=False, indent=2, default=str)
             rankings = 'SELECT id FROM t_pdd_rankings WHERE capture_date=%s'
             products = f'SELECT id FROM t_pdd_ranking_products WHERE ranking_id IN ({rankings})'
             owners = [('t_pdd_rankings', 'capture_date=%s'), ('t_pdd_ranking_products', f'ranking_id IN ({rankings})'),
                       *((table, f'ranking_product_id IN ({products})') for table in TABLES[2:] if table != 't_pdd_selling_point')]
             for table, condition in owners:
-                fields = [r['column_name'] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='spider' AND table_name=%s AND data_type='text'", (table,))]
+                fields = [r['column_name'] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='ods' AND table_name=%s AND data_type='text'", (table,))]
                 for row in db.execute(f'SELECT * FROM {table} WHERE {condition}', (source,)).fetchall():
                     changes = {}
                     for column in fields:

@@ -20,8 +20,8 @@ def connect(dsn=None, *, readonly=False):
     from automation.pdd.spider import config
     dsn = dsn or config.POSTGRES_URL
     if not dsn:
-        raise ValueError('请设置 SPIDER_POSTGRES_URL（数据库 pdd，命名空间 spider）')
-    options = '-c search_path=spider -c timezone=Asia/Shanghai'
+        raise ValueError('请设置 SPIDER_POSTGRES_URL（数据库 test，命名空间 ods）')
+    options = '-c search_path=ods -c timezone=Asia/Shanghai'
     if readonly:
         options += ' -c default_transaction_read_only=on -c statement_timeout=5000'
     return psycopg.connect(dsn, connect_timeout=5, autocommit=True, row_factory=dict_row, options=options)
@@ -29,7 +29,7 @@ def connect(dsn=None, *, readonly=False):
 
 def columns(db, table):
     return {row['column_name'] for row in db.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_schema='spider' AND table_name=%s", (table,))}
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='ods' AND table_name=%s", (table,))}
 
 
 WEBVIEW_SKIP = 'webview_element_skip'

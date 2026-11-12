@@ -112,10 +112,10 @@ def postgres_connection():
         if db.execute('SELECT 1 AS value').fetchone()['value'] != 1:
             return 'FAIL', 'Unexpected connection test result'
         if any(not columns(db, table) for table in TABLES):
-            return 'FAIL', 'spider tables missing; migration required'
+            return 'FAIL', 'ods.t_pdd_* tables missing'
         if not {'mobile_state', 'sogou_state'} <= columns(db, 't_pdd_ranking_products'):
             return 'FAIL', 'Collection state columns missing'
-    return 'OK', 'Connected; spider.t_pdd_* tables ready'
+    return 'OK', 'Connected; ods.t_pdd_* tables ready'
 
 
 def environment_checks():
