@@ -57,6 +57,15 @@ class OperationConsoleHandler(logging.StreamHandler):
             self.stream.write("\n")
             self.pending = None
 
+    def handleError(self, record):
+        # sys.stderr 已重定向到同一日志系统，直接写会递归；
+        # 控制台编码无法表示个别字符（如 ¥）时只影响控制台，不影响 UTF-8 文件日志。
+        if logging.raiseExceptions and sys.__stderr__ is not None:
+            try:
+                traceback.print_exc(file=sys.__stderr__)
+            except Exception:
+                pass
+
     def close(self):
         self.acquire()
         try:
@@ -195,6 +204,13 @@ class LogStream(io.TextIOBase):
 @contextmanager
 def console_logging(project_root):
     original_out, original_err = sys.stdout, sys.stderr
+    # Windows 控制台默认 GBK，无法编码 ¥(U+00A5) 等字符会抛 UnicodeEncodeError；
+    # 改为替换策略，避免单个不可编码字符拖垮整轮采集（UTF-8 文件日志不受影响）。
+    for stream in (original_out, original_err):
+        try:
+            stream.reconfigure(errors='replace')
+        except (AttributeError, ValueError, OSError):
+            pass
     parent = logging.getLogger("automation.pdd.spider")
     old_level, old_propagate = parent.level, parent.propagate
     parent.setLevel(logging.INFO)

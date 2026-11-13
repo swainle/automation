@@ -125,6 +125,7 @@ def collect(store, runtime, ranking_id=None, product_id=None):
     from automation.pdd.spider.database import today
     from automation.pdd.spider.workflow import FatalWorkflowError
     from wda.usbmux.exceptions import HTTPError
+    import psycopg
     if product_id is not None:
         row = store.db.execute('SELECT ranking_id FROM t_pdd_ranking_products WHERE id=%s', (product_id,)).fetchone()
         if row is None or (ranking_id is not None and ranking_id != row['ranking_id']):
@@ -148,20 +149,28 @@ def collect(store, runtime, ranking_id=None, product_id=None):
 
     for entry in entries:
         while True:
-            items = store.items(entry['id'])
-            targets = [i for i in items if product_id is None or i['id'] == product_id]
-            if not items or any(i['mobile_state'] != 'completed' for i in targets):
+            try:
+                items = store.items(entry['id'])
+                targets = [i for i in items if product_id is None or i['id'] == product_id]
+                if not items or any(i['mobile_state'] != 'completed' for i in targets):
+                    try:
+                        mobile_round(store, runtime, entry, product_id)
+                    except (HTTPError, OSError, FatalWorkflowError):
+                        raise
+                    except Exception as error:
+                        print(f'[手机] 本轮未完成：{error}', flush=True)
+                items = store.items(entry['id'])
+                targets = [i for i in items if product_id is None or i['id'] == product_id]
+                if targets and all(i['mobile_state'] == 'completed' for i in targets):
+                    break
+                wait(config.PRODUCT_RETRY_DELAY)
+            except psycopg.Error as error:
+                print(f'[数据库] 连接异常，重连后继续：{error}', flush=True)
                 try:
-                    mobile_round(store, runtime, entry, product_id)
-                except (HTTPError, OSError, FatalWorkflowError):
-                    raise
-                except Exception as error:
-                    print(f'[手机] 本轮未完成：{error}', flush=True)
-            items = store.items(entry['id'])
-            targets = [i for i in items if product_id is None or i['id'] == product_id]
-            if targets and all(i['mobile_state'] == 'completed' for i in targets):
-                break
-            wait(config.PRODUCT_RETRY_DELAY)
+                    store.reconnect()
+                except Exception as reconnect_error:
+                    print(f'[数据库] 重连失败：{reconnect_error}', flush=True)
+                time.sleep(config.RETRY_DELAY)
         store.export(entry['id'])
         items = store.items(entry['id'])
         store.list_state(entry['id'], 'completed' if items and all(

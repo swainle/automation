@@ -53,6 +53,7 @@ class Store:
 
     def __init__(self, dsn=None):
         from automation.pdd.spider import config
+        self.dsn = dsn
         self.data_root = config.BUSINESS_ROOT / 'data'
         self.db = connect(dsn)
         try:
@@ -64,6 +65,14 @@ class Store:
 
     def close(self):
         self.db.close()
+
+    def reconnect(self):
+        """重连数据库（应对临时断连），保留 search_path 等连接选项。"""
+        try:
+            self.db.close()
+        except Exception:
+            pass
+        self.db = connect(self.dsn)
 
     def seed_rankings(self, day, sources, root):
         start = week_start(day)
