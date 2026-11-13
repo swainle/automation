@@ -37,6 +37,10 @@ REVIEW_HEADER_PATTERN = r'商品评价|用户评价|暂无评价'
 REVIEW_MORE_ENTRIES = (r'^查看全部$', r'^查看全部评价$', r'^全部评价$', r'^更多评价$', r'^查看全部评论$')
 
 
+class EntryNotFound(RuntimeError):
+    pass
+
+
 def sku_groups(root, known=None):
     """Only SKU collection headers/cells; purchase/payment buttons are excluded."""
     result = {}
@@ -190,7 +194,7 @@ class IosProduct:
             node = self.find_entry(patterns, kind=kind)
             if node is not None:
                 return node
-        raise RuntimeError('未找到页面入口：' + ' / '.join(patterns))
+        raise EntryNotFound('未找到页面入口：' + ' / '.join(patterns))
 
     def close_panel(self):
         node = self.find(r'^关闭$', kind='Button')
@@ -609,16 +613,63 @@ class IosProduct:
             raise RuntimeError('评论菜单关闭后未确认原评论，停止后续点击')
 
     def comments(self):
+        self._comments_panel_open = False
+        for attempt in range(3):
+            try:
+                if attempt:
+                    self.snapshot()
+                    cancel = self.find(r'^取消$')
+                    if cancel is not None:
+                        self.tap(cancel)
+                        self.snapshot()
+                    if self._comments_panel_open:
+                        self.close_panel()
+                        self._comments_panel_open = False
+                return self._comments_once()
+            except Exception as error:
+                if attempt == 2:
+                    raise
+                print(f'[iOS 商品] 评价采集异常，保留进度重试 {attempt + 1}/2：{error}', flush=True)
+
+    def _comments_top(self):
+        self.snapshot()
+        previous = None
+        for _ in range(50):
+            signature = [(label(n), n.get('y')) for n in self.root.iter() if visible(n) and label(n)]
+            if signature == previous:
+                return
+            previous = signature
+            self.swipe(up=False)
+        raise RuntimeError('商品页回顶超过 50 次滑动，未确认顶部')
+
+    def _open_comments(self):
+        for attempt in range(3):
+            if attempt:
+                self._comments_top()
+            try:
+                self.seek(REVIEW_HEADER_PATTERN)
+                if self.find(r'暂无评价') is not None:
+                    return False
+                entry = self.seek_entry(REVIEW_MORE_ENTRIES)
+            except EntryNotFound:
+                if attempt == 2:
+                    print('[iOS 商品] 回顶重试两次仍无评价入口，按无评价完成', flush=True)
+                    return False
+                continue
+            self.tap(entry)
+            self._comments_panel_open = True
+            return True
+
+    def _comments_once(self):
         tab = self.find_entry(REVIEW_ENTRIES, kind='StaticText')
         if tab is not None:
             self.tap(tab)
             self.snapshot()
-        self.seek(REVIEW_HEADER_PATTERN)
-        if self.find(r'暂无评价') is not None:
+        if not self._open_comments():
+            self.negative = []
             return
-        self.tap(self.seek_entry(REVIEW_MORE_ENTRIES))
-        self.snapshot()
         try:
+            self.snapshot()
             expand = self.find(r'^标签展开按钮$')
             if expand is not None:
                 self.tap(expand)
@@ -628,7 +679,7 @@ class IosProduct:
             self.debug_json('评价标签.json', tags)
             dated = {r['ui_fingerprint']: r['time'] for r in self.negative
                      if r.get('ui_fingerprint') and r.get('time')}
-            seen = {}
+            seen = {r['ui_fingerprint']: r for r in self.negative}
             for tag in tags:
                 node = self.find('^' + re.escape(tag['label']) + '$')
                 if node is None:
@@ -682,6 +733,7 @@ class IosProduct:
                     self.tap(cancel)
                     self.snapshot()
                 self.close_panel()
+                self._comments_panel_open = False
             except Exception as error:
                 if not failed:
                     raise
