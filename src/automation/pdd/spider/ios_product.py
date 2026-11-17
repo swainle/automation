@@ -197,6 +197,11 @@ class IosProduct:
         raise EntryNotFound('未找到页面入口：' + ' / '.join(patterns))
 
     def close_panel(self):
+        if self.find(r'^增加数量$', kind='Button') is not None:
+            from automation.pdd.spider.full_flow import dismiss_sku_panel
+            dismiss_sku_panel(self.client)
+            self.snapshot()
+            return
         node = self.find(r'^关闭$', kind='Button')
         if node is None:
             raise RuntimeError('未找到面板关闭按钮，停止后续采集')
@@ -351,7 +356,7 @@ class IosProduct:
             self.snapshot()
 
     def skus(self):
-        button = self.find(r'购买|拼单|^立即参与万人团', kind='Button')
+        button = self.find(r'购买|拼单|^立即参与万人团|秒杀价|^加倍补', kind='Button')
         if button is None:
             raise RuntimeError('未找到商品规格入口')
         self.tap(button)
@@ -809,6 +814,8 @@ class IosProduct:
                 except RuntimeError:
                     continue
             if position is None:
+                if self.find(r'^增加数量$', kind='Button') is not None:
+                    self.close_panel()
                 print('[iOS 商品] 详情无放大图片浏览器（文字/规格详情），跳过详情图片采集')
                 return
         seen = set()
@@ -816,6 +823,7 @@ class IosProduct:
             for _ in range(total):
                 if position in seen:
                     raise RuntimeError('详情大图页码重复，未确认采集完整')
+                print(f'[详情] 采集 {len(seen) + 1}/{total}，图片页码 {position}/{total}', flush=True)
                 path = self.directory / '详情' / f'{position:04d}.jpg'
                 self.image(self.viewer_image(), path)
                 self.record_image('detail', path, position=position)
