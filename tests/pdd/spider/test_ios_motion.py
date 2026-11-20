@@ -74,6 +74,28 @@ class MotionTests(unittest.TestCase):
         self.assertGreater(args[4] - args[2], 0)
         self.assertLessEqual(abs(args[4] - args[2]), 896 * 0.12)
 
+    def test_forced_top_allows_long_board_and_stops_when_first_card_is_visible(self):
+        snapshots = [page(-2000 + step * 150) for step in range(10)] + [page()]
+        with patch.object(ios, '_get_window_size', return_value=(414, 896)), \
+                patch.object(ios, '_current_page_source', side_effect=snapshots[1:]), \
+                patch.object(ios, '_swipe', return_value=True) as drag, \
+                patch.object(ios.time, 'sleep'):
+            result = ios._scroll_to_top(Mock(), '目标商品的完整测试标题内容',
+                                       initial_xml=snapshots[0], force=True)
+        self.assertEqual(result, page())
+        self.assertEqual(drag.call_count, 10)
+
+    def test_forced_top_still_rejects_board_that_never_reaches_top(self):
+        snapshots = [page(-10000 + step * 10) for step in range(51)]
+        with patch.object(ios, '_get_window_size', return_value=(414, 896)), \
+                patch.object(ios, '_current_page_source', side_effect=snapshots[1:]), \
+                patch.object(ios, '_swipe', return_value=True) as drag, \
+                patch.object(ios.time, 'sleep'), \
+                self.assertRaisesRegex(RuntimeError, '未确认榜单已回到顶部'):
+            ios._scroll_to_top(Mock(), '目标商品的完整测试标题内容',
+                               initial_xml=snapshots[0], force=True)
+        self.assertEqual(drag.call_count, 50)
+
     def test_drag_uses_velocity_with_integer_coordinates(self):
         client = Mock()
         self.assertTrue(ios._swipe(client, 207.5, 450.2, 207.5, 400.1))

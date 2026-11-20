@@ -25,7 +25,12 @@ def reset_mobile(store, item, row):
         raise ValueError(f'非法产品清理目录：{folder}')
     # Validate all descendants before removing the product's old artifacts.
     if folder.exists():
-        shutil.rmtree(folder)
+        for path in folder.iterdir():
+            if path.name != '产品榜单截图.jpg':
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
     folder.mkdir(parents=True, exist_ok=True)
     metrics = from_row(row)
     fields = dict(title=row['标题'], **{k: metrics.get(k) for k in FIELDS})
@@ -40,39 +45,58 @@ def reset_mobile(store, item, row):
                          [*fields.values(), item['id']])
 
 
-def mobile_round(store, runtime, entry, product_id=None):
-    from automation.pdd.spider.navigation import open_app_board
+def mobile_round(store, runtime, entry, product_id=None, *, refreshed=None):
+    from automation.pdd.spider.navigation import BoardUnavailableError, open_app_board
     from automation.pdd.spider.mobile_page import wait_for_elements
     from automation.pdd.spider.rank import TAB_TO_CLASS
     from automation.pdd.spider.rank.current import read_tab
     from automation.pdd.spider.full_flow import prepare_top
     from automation.pdd.spider.weekly_mobile import run_products
+    existing = store.items(entry['id'])
     client = runtime.ensure_wda()
     xml = open_app_board(client, {'name': entry['source_name'], 'main_name': entry['main_name'], 'url': entry['source_url']},
                          inspect_xml=lambda source: wait_for_elements(lambda: ios._current_page_source(client), initial_xml=source))
     elements = ios._xcui_texts(xml)
+    if ios._guess_tab(elements) != entry['tab']:
+        try:
+            elements = ios._switch_rank_tab(client, entry['tab'], initial_elements=elements)
+        except RuntimeError as error:
+            raise BoardUnavailableError(f"无法进入目标子榜 {entry['tab']}：{error}") from error
     main = ios._rank_details(elements, TAB_TO_CLASS[entry['tab']])['主榜单名称']
     if main != entry['main_name'] or ios._guess_tab(elements) != entry['tab']:
-        raise RuntimeError('当前手机榜单与目标榜单不符')
+        raise BoardUnavailableError(f"当前手机榜单与目标榜单不符：目标 {entry['main_name']}/{entry['tab']}，实际 {main}/{ios._guess_tab(elements)}")
     header, rows = read_tab(client, main, entry['tab'], initial_elements=elements)
-    store.save_rows(entry['id'], entry['directory'], header, rows)
-    targets = [i for i in store.items(entry['id']) if i['mobile_state'] != 'completed'
-               and (product_id is None or i['id'] == product_id)]
+    store.save_snapshot(entry['id'], rows)
+    saved = {i['rank']: i for i in existing}
+    targets = [dict(rank=int(row['排行']), directory=str(Path(entry['directory']) / f"榜{int(row['排行']):02d}"))
+               for row in rows if (int(row['排行']) not in saved or saved[int(row['排行'])]['mobile_state'] != 'completed')
+               and (product_id is None or saved.get(int(row['排行']), {}).get('id') == product_id)]
     by_rank = {int(r['排行']): r for r in rows}
-    for item in targets:
-        if item['rank'] not in by_rank:
+    for item in existing:
+        if item['mobile_state'] != 'completed' and item['rank'] not in by_rank:
             raise RuntimeError(f"当前榜单缺少排名 {item['rank']}")
-    # Capture in isolation so completed product crops remain untouched.
-    xml, elements = prepare_top(client, main, entry['tab'], rows, client.__dict__.get('_rank_last_elements', elements))
-    Path(entry['directory']).mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=entry['directory'], prefix='.capture-') as temporary:
-        longshot.capture(client, rows, xml, Path(temporary), compact=True)
-        for item in targets:
-            reset_mobile(store, item, by_rank[item['rank']])
-            shutil.copy2(Path(temporary) / f"榜{item['rank']:02d}/产品榜单截图.jpg", Path(item['directory']) / '产品榜单截图.jpg')
-        shutil.copy2(Path(temporary) / '榜单长图.jpg', Path(entry['directory']) / '榜单长图.jpg')
+    # Keep the top coordinates paired with the live snapshot for title-based scroll correction.
+    client.__dict__['_rank_top_elements'] = elements
+    if targets and (refreshed is None or entry['id'] not in refreshed):
+        xml, elements = prepare_top(client, main, entry['tab'], rows, client.__dict__.get('_rank_last_elements', elements))
+        client.__dict__['_rank_top_elements'] = elements
+        Path(entry['directory']).mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=entry['directory'], prefix='.capture-') as temporary:
+            longshot.capture(client, rows, xml, Path(temporary), compact=True)
+            for item in targets:
+                Path(item['directory']).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(Path(temporary) / f"榜{item['rank']:02d}/产品榜单截图.jpg", Path(item['directory']) / '产品榜单截图.jpg')
+            output = Path(entry['directory']) / '榜单长图.jpg'
+            captured = Path(temporary) / '榜单长图.jpg'
+            if not output.exists() or longshot.image_digest(output) != longshot.image_digest(captured):
+                shutil.copy2(captured, output)
+        if refreshed is not None:
+            refreshed.add(entry['id'])
+    from automation.pdd.spider.utils import write_xlsx
+    write_xlsx(Path(entry['directory']) / '榜单数据.xlsx', header, [[row.get(k, '') for k in header] for row in rows])
     client.__dict__.pop('_rank_last_elements', None)
     run_products(store, client, entry, rows, single_round=True, product_id=product_id)
+    return len(rows)
 
 
 def web_round(store, runtime, entry, product_id=None):
@@ -121,6 +145,7 @@ def check(store, ranking_id=None, product_id=None):
 
 
 def collect(store, runtime, ranking_id=None, product_id=None):
+    from automation.pdd.spider.navigation import BoardUnavailableError
     from automation.pdd.spider.rank import read_leaderboards
     from automation.pdd.spider.database import today
     from automation.pdd.spider.workflow import FatalWorkflowError
@@ -147,22 +172,36 @@ def collect(store, runtime, ranking_id=None, product_id=None):
             time.sleep(min(30, max(0, deadline - time.monotonic())))
 
     for entry in entries:
+        unavailable = False
+        refreshed = set()
+        expected = entry.get('product_count', 0)
+        attempted = False
         while True:
             items = store.items(entry['id'])
             targets = [i for i in items if product_id is None or i['id'] == product_id]
-            if not items or any(i['mobile_state'] != 'completed' for i in targets):
+            if not items or any(i['mobile_state'] != 'completed' for i in targets) or (product_id is None and len(items) < expected):
                 try:
-                    mobile_round(store, runtime, entry, product_id)
+                    attempted = True
+                    mobile_round(store, runtime, entry, product_id, refreshed=refreshed)
+                except BoardUnavailableError as error:
+                    store.list_state(entry['id'], 'unavailable')
+                    print(f"[榜单] {entry['main_name']}/{entry['tab']} 暂不可用，本次跳过，下次启动重试：{error}", flush=True)
+                    unavailable = True
+                    break
                 except (HTTPError, OSError, FatalWorkflowError):
                     raise
                 except Exception as error:
                     print(f'[手机] 本轮未完成：{error}', flush=True)
+                expected = store.list(entry['id']).get('product_count', expected)
             items = store.items(entry['id'])
             targets = [i for i in items if product_id is None or i['id'] == product_id]
-            if targets and all(i['mobile_state'] == 'completed' for i in targets):
+            if targets and all(i['mobile_state'] == 'completed' for i in targets) and (product_id is not None or len(items) >= expected):
                 break
             wait(config.PRODUCT_RETRY_DELAY)
-        store.export(entry['id'])
+        if unavailable:
+            continue
+        if not attempted and not entry.get('product_count', 0):
+            store.export(entry['id'])
         items = store.items(entry['id'])
         store.list_state(entry['id'], 'completed' if items and all(
             i['mobile_state'] == i['sogou_state'] == 'completed' for i in items) else 'pending')

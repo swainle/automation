@@ -2,6 +2,11 @@
 from automation.pdd.spider.logging_setup import timed_operation
 import re
 import time
+import xml.etree.ElementTree as ET
+
+
+class BoardUnavailableError(RuntimeError):
+    """The link did not reach the requested leaderboard before the deadline."""
 
 
 def board_name(value):
@@ -86,6 +91,27 @@ def open_app_board(client, source, *, timeout=90, inspect_xml=None):
                     print(f"[榜单] 已核对目标榜单：{source['name']}", flush=True)
                     return xml
                 if foreground == ios.SAFARI_BUNDLE_ID:
+                    # Safari renders some Open-in-App prompts outside WDA's alert API.
+                    dialogs = ET.fromstring(xml).findall(".//*[@name='SFDialogView']")
+                    for dialog in dialogs:
+                        prompt = ios._xcui_texts(ET.tostring(dialog, encoding='unicode'))
+                        if not any('拼多多' in e['text'] and any(word in e['text'].lower()
+                                   for word in ('打开', 'open')) for e in prompt):
+                            continue
+                        button = next((e for e in prompt if e['type'] == 'Button'
+                                       and e['text'].casefold() in {'打开', 'open'}
+                                       and e['w'] > 0 and e['h'] > 0), None)
+                        if button is not None:
+                            if not ios._tap_xy(client, button['x'] + button['w'] / 2,
+                                               button['y'] + button['h'] / 2, button['text']):
+                                raise RuntimeError('Safari 确认打开拼多多失败')
+                            print('[榜单] 已确认 Safari 在拼多多中打开', flush=True)
+                            time.sleep(3)
+                            break
+                    else:
+                        dialogs = []
+                    if dialogs:
+                        continue
                     candidates = [element for element in elements
                                   if ''.join(element['text'].split()).casefold() in {
                                       '打开拼多多app', '在app打开', '在app中打开', '在拼多多中打开'}
@@ -107,4 +133,4 @@ def open_app_board(client, source, *, timeout=90, inspect_xml=None):
         time.sleep(.5)
     if last_timeout is not None:
         raise last_timeout
-    raise RuntimeError(f"Safari 未打开目标榜单：{source['name']}；请检查打开 App 提示及链接有效性")
+    raise BoardUnavailableError(f"Safari 未打开目标榜单：{source['name']}；请检查打开 App 提示及链接有效性")

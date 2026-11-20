@@ -133,7 +133,8 @@ def environment_checks():
 
 
 def collection_status(db, ranking_id=None, product_id=None):
-    rows = db.execute('''SELECT r.id,r.main_name,r.tab_name,r.web_collected_at,COUNT(p.id) AS total,
+    total = 'GREATEST(COUNT(p.id),r.product_count)' if product_id is None and 'product_count' in columns(db, 't_pdd_rankings') else 'COUNT(p.id)'
+    rows = db.execute(f'''SELECT r.id,r.main_name,r.tab_name,r.web_collected_at,{total} AS total,
         COUNT(p.id) FILTER (WHERE p.mobile_state='completed') AS mobile_done,
         COUNT(p.id) FILTER (WHERE p.sogou_state='completed') AS web_done
         FROM t_pdd_rankings r LEFT JOIN t_pdd_ranking_products p ON p.ranking_id=r.id

@@ -24,7 +24,9 @@ def connect(dsn=None, *, readonly=False):
     options = '-c search_path=ods -c timezone=Asia/Shanghai'
     if readonly:
         options += ' -c default_transaction_read_only=on -c statement_timeout=5000'
-    return psycopg.connect(dsn, connect_timeout=5, autocommit=True, row_factory=dict_row, options=options)
+    # Mobile stages can leave the connection idle longer than a network gateway allows.
+    return psycopg.connect(dsn, connect_timeout=5, autocommit=True, row_factory=dict_row, options=options,
+                           keepalives=1, keepalives_idle=60, keepalives_interval=30, keepalives_count=5)
 
 
 def columns(db, table):
@@ -139,6 +141,35 @@ class Store:
 
     def items(self, list_id):
         return [self.item(r['id']) for r in self.db.execute('SELECT id FROM t_pdd_ranking_products WHERE ranking_id=%s ORDER BY rank', (list_id,))]
+
+    def save_snapshot(self, list_id, rows):
+        ranks = [int(row['排行']) for row in rows]
+        if ranks != list(range(1, len(rows) + 1)):
+            raise ValueError('榜单排名必须从 1 开始连续且不重复')
+        if not ranks:
+            raise ValueError('榜单商品为空')
+        with self.db.transaction():
+            self.db.execute("""UPDATE t_pdd_rankings SET product_count=%s,snapshot_state='completed',
+                description=%s WHERE id=%s""", (len(rows), rows[0].get('榜单统计说明', ''), list_id))
+
+    def save_item(self, list_id, directory, row):
+        entry = self.list(list_id)
+        day = date.fromisoformat(entry['capture_date'])
+        year, week, _ = day.isocalendar()
+        rank = int(row['排行'])
+        if rank < 1 or not row['标题'].strip():
+            raise ValueError('商品排名和标题无效')
+        metrics = from_row(row)
+        fields = ['ranking_id', 'rank', 'title', 'directory', 'collection_month', 'collection_month_week',
+                  'collection_week_year', 'collection_year_week', *FIELDS]
+        values = [list_id, rank, row['标题'], str(Path(directory) / f'榜{rank:02d}'),
+                  day.strftime('%Y-%m'), (day.day - 1) // 7 + 1, year, week, *(metrics[k] for k in FIELDS)]
+        with self.db.transaction():
+            item_id = self.db.execute(f'''INSERT INTO t_pdd_ranking_products({','.join(fields)})
+                VALUES({','.join('%s' for _ in fields)}) ON CONFLICT(ranking_id,rank) DO UPDATE SET
+                {','.join(f'{k}=excluded.{k}' for k in ['title', *FIELDS])},updated_at={SQL_NOW}
+                RETURNING id''', values).fetchone()['id']
+        return self.item(item_id)
 
     def requeue_undated_comments(self, list_id):
         with self.db.transaction():

@@ -5,7 +5,7 @@ from wda.exceptions import WDARequestError
 from wda.usbmux.exceptions import HTTPError
 
 from automation.pdd.spider import ios
-from automation.pdd.spider.navigation import _accept_app_prompt, is_target_board, open_app_board
+from automation.pdd.spider.navigation import BoardUnavailableError, _accept_app_prompt, is_target_board, open_app_board
 
 
 SOURCE = {'name': '猫粮畅销榜', 'url': 'https://example.com/rank'}
@@ -91,6 +91,41 @@ def test_failed_termination_prevents_next_url():
     value.session.assert_not_called()
 
 
+@pytest.mark.parametrize('message', ['在“拼多多”中打开此页？', 'Open this page in “拼多多”?'])
+def test_safari_dialog_not_exposed_by_alert_api_is_accepted(message):
+    value = client()
+    value.http.get.side_effect = [Mock(value={'bundleId': ios.SAFARI_BUNDLE_ID}),
+                                 Mock(value={'bundleId': ios.PDD_BUNDLE_ID})]
+    page = f'''<root><XCUIElementTypeOther name="SFDialogView">
+        <XCUIElementTypeTextView label="{message}" />
+        <XCUIElementTypeButton label="打开" x="301" y="388" width="34" height="33" />
+        </XCUIElementTypeOther>
+        <XCUIElementTypeButton label="打开拼多多APP" x="10" y="100" width="200" height="40" /></root>'''
+    with patch('automation.pdd.spider.navigation._accept_app_prompt', return_value=False), \
+            patch.object(ios, '_current_page_source', side_effect=[page, TARGET]), \
+            patch.object(ios, '_tap_xy', return_value=True) as tap, \
+            patch('automation.pdd.spider.navigation.time.sleep'):
+        assert open_app_board(value, SOURCE) == TARGET
+    tap.assert_called_once_with(value, 318, 404.5, '打开')
+
+
+def test_unrelated_safari_dialog_is_not_accepted():
+    value = client()
+    value.http.get.return_value.value = {'bundleId': ios.SAFARI_BUNDLE_ID}
+    page = '''<root><XCUIElementTypeOther name="SFDialogView">
+        <XCUIElementTypeTextView label="在其他应用中打开此页？" />
+        <XCUIElementTypeButton label="打开" x="301" y="388" width="34" height="33" />
+        </XCUIElementTypeOther></root>'''
+    with patch('automation.pdd.spider.navigation._accept_app_prompt', return_value=False), \
+            patch.object(ios, '_current_page_source', return_value=page), \
+            patch.object(ios, '_tap_xy') as tap, \
+            patch('automation.pdd.spider.navigation.time.monotonic', side_effect=[0, 0, 100]), \
+            patch('automation.pdd.spider.navigation.time.sleep'), \
+            pytest.raises(BoardUnavailableError):
+        open_app_board(value, SOURCE)
+    tap.assert_not_called()
+
+
 def test_previous_board_is_never_accepted_and_timeout_is_reported():
     value = client()
     old_page = TARGET.replace('猫粮', '旧榜单')
@@ -98,7 +133,7 @@ def test_previous_board_is_never_accepted_and_timeout_is_reported():
             patch.object(ios, '_current_page_source', return_value=old_page), \
             patch('automation.pdd.spider.navigation.time.monotonic', side_effect=[0, 0, 100]), \
             patch('automation.pdd.spider.navigation.time.sleep'), \
-            pytest.raises(RuntimeError, match='Safari 未打开目标榜单'):
+            pytest.raises(BoardUnavailableError, match='Safari 未打开目标榜单'):
         open_app_board(value, SOURCE)
 
 

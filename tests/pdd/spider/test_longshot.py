@@ -44,6 +44,20 @@ def test_geometry_excludes_recommendation_badges():
     assert layout['end'] == 1346
 
 
+def test_geometry_disambiguates_duplicate_titles_by_position():
+    xml = '<XCUIElementTypeApplication x="0" y="0" width="414" height="896">'
+    dup = '同名商品完整标题'
+    rows = [{'排行': 1, '标题': dup}, {'排行': 2, '标题': dup}, {'排行': 3, '标题': '商品3标题'}]
+    for rank, y in ((1, 229), (2, 451), (3, 673)):
+        title = dup if rank in (1, 2) else '商品3标题'
+        xml += f'<XCUIElementTypeOther x="6" y="{y}" width="43" height="39"/>'
+        xml += f'<XCUIElementTypeStaticText label="{title}" x="192" y="{y+60}" width="200" height="60"/>'
+    xml += '<XCUIElementTypeStaticText label="更多上榜商品推荐" x="140" y="900" width="150" height="30"/>'
+    xml += '</XCUIElementTypeApplication>'
+    layout = longshot.geometry(xml, rows, (828, 1792))
+    assert layout['tops'] == [446, 890, 1334]
+
+
 def test_unrelated_screens_are_rejected():
     a = scene().crop((0, 0, 240, 300))
     b = Image.new('RGB', a.size, 'black')

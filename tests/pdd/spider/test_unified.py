@@ -33,6 +33,28 @@ def test_web_cooldown_boundary():
     assert unified.remaining_web_wait({'web_collected_at': (now - timedelta(minutes=30)).isoformat()}, now) == 0
 
 
+def test_unavailable_board_skips_without_waiting_and_retries_next_run(monkeypatch):
+    from automation.pdd.spider.navigation import BoardUnavailableError
+    entries = [dict(id=1, main_name='猫粮', tab='畅销榜'), dict(id=2, main_name='猫砂', tab='畅销榜')]
+    store = Mock()
+    store.seed_rankings.return_value = entries
+    states = {1: 'pending', 2: 'pending'}
+    store.list_state.side_effect = lambda rid, state: states.update({rid: state})
+    store.items.side_effect = lambda rid: [] if rid == 1 else [dict(mobile_state='completed', sogou_state='pending')]
+    monkeypatch.setattr('automation.pdd.spider.rank.read_leaderboards', Mock(return_value=[{}]))
+    mobile = Mock(side_effect=BoardUnavailableError('未跳转'))
+    monkeypatch.setattr(unified, 'mobile_round', mobile)
+    sleep = Mock(side_effect=AssertionError('不可用榜单不应等待重试'))
+    monkeypatch.setattr(unified.time, 'sleep', sleep)
+    for _ in range(2):
+        assert unified.collect(store, Mock()) == 0
+        assert states == {1: 'unavailable', 2: 'pending'}
+    assert mobile.call_count == 2
+    assert all(call.args[2]['id'] == 1 for call in mobile.call_args_list)
+    assert [call.args for call in store.export.call_args_list] == [(2,), (2,)]
+    sleep.assert_not_called()
+
+
 def test_web_only_fills_matching_pending_products(board, monkeypatch):
     store, entry = board
     finish_mobile(store, entry)
@@ -143,7 +165,7 @@ def test_check_cli_does_not_launch_collection(board, monkeypatch, capsys):
 def test_retries_beyond_three_rounds(board, monkeypatch):
     store, entry = board
     attempts = []
-    def mobile(*args):
+    def mobile(*args, **kwargs):
         attempts.append(1)
         if len(attempts) == 5:
             finish_mobile(store, entry)
@@ -161,7 +183,7 @@ def test_retries_beyond_three_rounds(board, monkeypatch):
 
 def test_mobile_collection_never_requests_web(board, monkeypatch):
     store, entry = board
-    monkeypatch.setattr(unified, 'mobile_round', lambda *args: finish_mobile(store, entry))
+    monkeypatch.setattr(unified, 'mobile_round', lambda *args, **kwargs: finish_mobile(store, entry))
     web = Mock(side_effect=AssertionError('手机采集不应访问网页'))
     monkeypatch.setattr(unified, 'web_round', web)
     assert unified.collect(store, Mock(), ranking_id=entry['id']) == 0
@@ -182,7 +204,9 @@ def test_mobile_round_replaces_only_unfinished_product(board, monkeypatch):
     monkeypatch.setattr('automation.pdd.spider.navigation.open_app_board', Mock(return_value='xml'))
     monkeypatch.setattr(ios := unified.ios, '_xcui_texts', Mock(return_value=[]))
     monkeypatch.setattr(ios, '_rank_details', Mock(return_value={'主榜单名称': entry['main_name']}))
-    monkeypatch.setattr(ios, '_guess_tab', Mock(return_value=entry['tab']))
+    monkeypatch.setattr(ios, '_guess_tab', Mock(side_effect=['好评榜', entry['tab']]))
+    switch = Mock(return_value=[{'text': '已切换'}])
+    monkeypatch.setattr(ios, '_switch_rank_tab', switch)
     rows = [{'排行': 1, '标题': '新商品一'}, {'排行': 2, '标题': '换了商品二'}]
     monkeypatch.setattr('automation.pdd.spider.rank.current.read_tab', Mock(return_value=([], rows)))
     monkeypatch.setattr('automation.pdd.spider.full_flow.prepare_top', Mock(return_value=('xml', [])))
@@ -196,9 +220,25 @@ def test_mobile_round_replaces_only_unfinished_product(board, monkeypatch):
     run = Mock()
     monkeypatch.setattr('automation.pdd.spider.weekly_mobile.run_products', run)
     unified.mobile_round(store, Mock(), entry)
-    assert store.item(one['id'])['title'] == '新商品一'
+    assert switch.call_count == 1
+    assert switch.call_args.args[1] == entry['tab']
+    assert switch.call_args.kwargs == {'initial_elements': []}
+    assert store.item(one['id'])['title'] == '商品一'
     assert (Path(one['directory']) / '产品榜单截图.jpg').read_bytes() == b'new'
     assert store.item(two['id'])['title'] == '商品二'
     assert store.item(two['id'])['platform_product_link'] == 'keep'
     assert (Path(two['directory']) / '产品榜单截图.jpg').read_bytes() == b'old'
     assert run.call_args.kwargs['single_round'] is True
+
+
+def test_mobile_round_missing_tab_is_unavailable(monkeypatch):
+    from automation.pdd.spider.navigation import BoardUnavailableError
+    monkeypatch.setattr('automation.pdd.spider.navigation.open_app_board', Mock(return_value='xml'))
+    monkeypatch.setattr(unified.ios, '_xcui_texts', Mock(return_value=[]))
+    monkeypatch.setattr(unified.ios, '_guess_tab', Mock(return_value='畅销榜'))
+    monkeypatch.setattr(unified.ios, '_switch_rank_tab', Mock(side_effect=RuntimeError('未找到可点击的子榜标签')))
+    store = Mock()
+    with pytest.raises(BoardUnavailableError, match='好评榜'):
+        unified.mobile_round(store, Mock(), {'id': 1, 'tab': '好评榜', 'source_name': '猫粮',
+            'main_name': '猫粮', 'source_url': 'https://example.com/rank'})
+    store.save_rows.assert_not_called()

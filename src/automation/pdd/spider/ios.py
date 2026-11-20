@@ -1204,11 +1204,12 @@ def _scroll_to_top(client, first_title: str | None = None, times: int = 8,
             first_title = _extract_title(cards[0])
     previous = None
     stalled = 0
-    for _ in range(times):
+    # A full leaderboard can exceed eight short drags after long-image capture.
+    for attempt in range(max(times, 50) if force else times):
         if not xml:
             return
         elems = _xcui_texts(xml)
-        if not force and first_title and any(first_title[:12] in e["text"]
+        if (not force or attempt > 0) and first_title and any(first_title[:12] in e["text"]
                                and h * 0.2 <= e["y"] < h * 0.6 for e in elems):
             print("[ios]   首卡已在顶部区域，跳过回顶")
             return xml

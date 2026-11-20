@@ -51,14 +51,15 @@ def geometry(xml, rows, image_size):
         raise ValueError('没有在最后一个商品之后找到榜单结束分界')
     end = round(min(ends) * sy)
     for index, row in enumerate(rows):
+        bottom = tops[index + 1] if index + 1 < len(tops) else end
         titles = [element for element in elements if element['type'] == 'StaticText'
                   and element['text'].replace('\u200b', '').strip() == row['标题']]
-        if len(titles) != 1:
+        # 榜单内可能存在同名商品（标题重复）：用排行徽标区间消歧，
+        # 取落在本行位置区间内的那一个标题元素；若仍不唯一则报错。
+        candidates = [t for t in titles if tops[index] <= t['y'] * sy < bottom]
+        if len(candidates) != 1:
             raise ValueError(f"排行 {row['排行']} 标题不唯一，不能可靠裁剪")
-        y = titles[0]['y'] * sy
-        bottom = tops[index + 1] if index + 1 < len(tops) else end
-        if not tops[index] <= y < bottom:
-            raise ValueError(f"排行 {row['排行']} 的离屏坐标错位，不能可靠裁剪")
+        y = candidates[0]['y'] * sy
     return {'tops': tops, 'end': end, 'body_top': tops[0], 'scale': sy}
 
 

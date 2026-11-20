@@ -214,21 +214,35 @@ def test_detail_gallery_enlarges_and_swipes_right_through_all_pages(tmp_path):
     from unittest.mock import Mock, patch
     from PIL import Image
     from automation.pdd.spider.ios_product import IosProduct
-    page = ET.fromstring('<XCUIElementTypeApplication width="414" height="896"><XCUIElementTypeStaticText name="详情" visible="true"/><XCUIElementTypeImage x="0" y="200" width="414" height="300" visible="true"/></XCUIElementTypeApplication>')
+    page = ET.fromstring('<XCUIElementTypeApplication width="414" height="896"><XCUIElementTypeStaticText name="详情" visible="true"/><XCUIElementTypeImage x="0" y="200" width="414" height="300" visible="true"/><XCUIElementTypeImage x="0" y="500" width="414" height="300" visible="true"/></XCUIElementTypeApplication>')
     def gallery(index):
         return ET.fromstring(f'<XCUIElementTypeApplication width="414" height="896"><XCUIElementTypeStaticText name="{index}/3" visible="true"/><XCUIElementTypeImage x="0" y="200" width="414" height="414" visible="true"/><XCUIElementTypeButton x="4" y="48" width="44" height="44" visible="true"/></XCUIElementTypeApplication>')
     collector = IosProduct(Mock(), Mock())
     collector.root, collector.width, collector.height = page, 414, 896
     collector.directory, collector.images, collector.item = tmp_path, [], {'id': 1}
     collector.client.screenshot.side_effect = lambda: Image.new('RGB', (828, 1792))
-    snapshots = iter([page, gallery(1), gallery(3), gallery(2), page])
+    snapshots = iter([page, gallery(2), gallery(1), gallery(3), page])
     collector.snapshot = Mock(side_effect=lambda: setattr(collector, 'root', next(snapshots)))
     with patch('automation.pdd.spider.ios_product.time.sleep'), patch('automation.pdd.spider.ios._swipe', return_value=True) as swipe:
         collector.details()
-    assert [r['position'] for r in collector.images] == [1, 3, 2]
+    assert [call.args for call in collector.client.click.call_args_list] == [(0, 0), (207, 560), (26, 70)]
+    assert [r['position'] for r in collector.images] == [2, 1, 3]
     assert swipe.call_count == 2
     assert all(call.args[0] is collector.client and call.args[1] < call.args[3] for call in swipe.call_args_list)
     assert Image.open(tmp_path / '详情/0003.jpg').size == (828, 828)
+
+
+@pytest.mark.parametrize('count,selected', [(0, None), (1, '0'), (2, '1'), (3, '1')])
+def test_detail_thumbnail_prefers_second_visible_candidate(count, selected):
+    from unittest.mock import Mock
+    from automation.pdd.spider.ios_product import IosProduct
+    collector = IosProduct(Mock(), Mock())
+    collector.width, collector.height = 414, 896
+    collector.root = ET.fromstring('<App>' + ''.join(
+        f'<XCUIElementTypeImage name="{i}" visible="true" x="0" y="{150 + i * 200}" width="414" height="180"/>'
+        for i in range(count)) + '</App>')
+    thumbnail = collector._detail_thumbnail()
+    assert (thumbnail.get('name') if thumbnail is not None else None) == selected
 
 
 def test_sku_image_captures_enlarged_view_and_returns_to_panel(tmp_path):

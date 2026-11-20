@@ -745,18 +745,19 @@ class IosProduct:
                 print(f'[iOS 商品] 评价面板清理失败，保留原始错误：{error}', flush=True)
 
     def _detail_thumbnail(self):
-        """详情区可点击的大图（排除播放/领券等运营卡片）。"""
+        """优先第二个可点击详情图，排除播放/领券等运营卡片。"""
         excluded_images = {image for cell in self.root.iter('XCUIElementTypeCell')
                            if any(re.search(r'player (?:play|pause)|播放|暂停', label(button))
                                   for button in cell.iter('XCUIElementTypeButton'))
                            or any(re.search(r'领券|抢券|送你.*券|大促直降', label(text))
                                   for text in cell.iter('XCUIElementTypeStaticText'))
                            for image in cell.iter('XCUIElementTypeImage')}
-        return next((n for n in self.root.iter('XCUIElementTypeImage') if visible(n)
+        candidates = [n for n in self.root.iter('XCUIElementTypeImage') if visible(n)
                      and n not in excluded_images
                      and rect(n)[2] - rect(n)[0] >= self.width * .8
                      and rect(n)[3] - rect(n)[1] > 150
-                     and min(rect(n)[3], self.height - 85) - max(rect(n)[1], 125) >= 60), None)
+                     and min(rect(n)[3], self.height - 85) - max(rect(n)[1], 125) >= 60]
+        return candidates[min(1, len(candidates) - 1)] if candidates else None
 
     def _open_details(self):
         """进入详情区：点「详情」入口，或滚动到已内联展开的详情图。
@@ -786,19 +787,35 @@ class IosProduct:
                 return
         raise RuntimeError('未找到详情入口或可点击的详情图片：' + ' / '.join(DETAIL_ENTRIES))
 
+    def _exit_detail_video(self):
+        buttons = [n for n in self.root.iter('XCUIElementTypeButton') if visible(n)
+                   and label(n) == 'pdd gallery bar back remove bg'
+                   and rect(n)[0] < self.width * .2 and rect(n)[1] < 100]
+        if len(buttons) != 1 or not any(visible(n) and label(n) == '关注'
+                                      for n in self.root.iter('XCUIElementTypeStaticText')):
+            return False
+        self.tap(buttons[0])
+        self.snapshot()
+        if (any(visible(n) and label(n) == 'pdd gallery bar back remove bg' for n in self.root.iter())
+                or not any(visible(n) and label(n) == '商品详情' for n in self.root.iter())):
+            raise RuntimeError('退出详情视频后未确认返回商品详情，停止继续点击')
+        print('[详情] 已退出视频，向下寻找详情图片', flush=True)
+        return True
+
     def details(self):
         self._open_details()
         for attempt in range(12):
             thumbnail = self._detail_thumbnail()
             if thumbnail is not None:
-                break
+                x1, y1, x2, y2 = rect(thumbnail)
+                self.client.click(round((x1 + x2) / 2), round(min(max(y1, 125) + 60, y2 - 1, self.height - 100)))
+                time.sleep(.5)
+                self.snapshot()
+                if not self._exit_detail_video():
+                    break
             if attempt == 11:
                 raise RuntimeError('滚动后未找到可点击的详情图片，未使用页面分段截图代替')
             self.swipe(top=.3, bottom=.7)
-        x1, y1, x2, y2 = rect(thumbnail)
-        self.client.click(round((x1 + x2) / 2), round(min(max(y1, 125) + 60, y2 - 1, self.height - 100)))
-        time.sleep(.5)
-        self.snapshot()
         try:
             position, total = self.viewer_counter()
         except RuntimeError:

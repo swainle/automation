@@ -6,6 +6,68 @@ import pytest
 from automation.pdd.spider.ios_product import IosProduct
 
 
+VIDEO = '''<App><XCUIElementTypeButton name="pdd gallery bar back remove bg"
+    visible="true" x="8" y="54" width="32" height="32"/>
+    <XCUIElementTypeStaticText name="关注" visible="true"/></App>'''
+DETAIL = '<App><XCUIElementTypeOther name="商品详情" visible="true"/></App>'
+
+
+@pytest.mark.parametrize('returned', [True, False])
+def test_detail_video_exit_requires_verified_product_details(returned):
+    collector = IosProduct(Mock(), Mock())
+    collector.width, collector.height = 414, 896
+    collector.root = ET.fromstring(VIDEO)
+    collector.tap = Mock()
+    collector.snapshot = Mock(side_effect=lambda: setattr(collector, 'root', ET.fromstring(DETAIL if returned else VIDEO)))
+    if returned:
+        assert collector._exit_detail_video() is True
+    else:
+        with pytest.raises(RuntimeError, match='未确认返回商品详情'):
+            collector._exit_detail_video()
+    assert collector.tap.call_args.args[0].get('name') == 'pdd gallery bar back remove bg'
+
+
+def test_details_exits_video_then_collects_image(monkeypatch, tmp_path):
+    monkeypatch.setattr('automation.pdd.spider.ios_product.time.sleep', Mock())
+    collector = IosProduct(Mock(), Mock())
+    collector.width, collector.height, collector.directory = 414, 896, tmp_path
+    collector.root = ET.fromstring(DETAIL)
+    collector._open_details = Mock()
+    collector._detail_thumbnail = Mock(return_value=ET.fromstring('<Image x="0" y="200" width="414" height="300"/>'))
+    pages = iter([VIDEO, DETAIL, '<App/>'])
+    collector.snapshot = Mock(side_effect=lambda: setattr(collector, 'root', ET.fromstring(next(pages))))
+    collector.tap, collector.swipe = Mock(), Mock()
+    collector.viewer_counter = Mock(return_value=(1, 1))
+    collector.viewer_image, collector.image = Mock(), Mock()
+    collector.record_image, collector.close_viewer = Mock(), Mock()
+    collector.details()
+    assert collector.client.click.call_count == 2
+    collector.tap.assert_called_once()
+    collector.swipe.assert_called_once_with(top=.3, bottom=.7)
+    collector.record_image.assert_called_once_with('detail', tmp_path / '详情/0001.jpg', position=1)
+
+
+def test_details_repeated_video_stops_without_marking_images_complete(monkeypatch):
+    monkeypatch.setattr('automation.pdd.spider.ios_product.time.sleep', Mock())
+    collector = IosProduct(Mock(), Mock())
+    collector.width, collector.height = 414, 896
+    collector._open_details = Mock()
+    collector._detail_thumbnail = Mock(return_value=ET.fromstring('<Image x="0" y="200" width="414" height="300"/>'))
+    collector.snapshot = Mock(side_effect=lambda: setattr(collector, 'root', ET.fromstring(VIDEO)))
+    collector.tap = Mock(side_effect=lambda node: None)
+    def snapshot():
+        collector.root = ET.fromstring(DETAIL if collector.tap.call_count > snapshot.exits else VIDEO)
+        snapshot.exits = collector.tap.call_count
+    snapshot.exits = 0
+    collector.snapshot.side_effect = snapshot
+    collector.swipe, collector.viewer_counter = Mock(), Mock()
+    with pytest.raises(RuntimeError, match='未找到可点击的详情图片'):
+        collector.details()
+    assert collector.tap.call_count == 12
+    assert collector.swipe.call_count == 11
+    collector.viewer_counter.assert_not_called()
+
+
 @pytest.mark.parametrize('failed', [False, True])
 def test_sku_panel_uses_verified_close(monkeypatch, failed):
     collector = IosProduct(Mock(), Mock())
@@ -27,6 +89,7 @@ def test_details_closes_sku_panel_when_no_image_viewer(monkeypatch):
     monkeypatch.setattr('automation.pdd.spider.ios_product.time.sleep', Mock())
     collector = IosProduct(Mock(), Mock())
     collector.width, collector.height = 414, 896
+    collector.root = ET.fromstring('<App/>')
     collector._open_details = Mock()
     collector._detail_thumbnail = Mock(return_value=ET.fromstring(
         '<Image x="0" y="200" width="414" height="414"/>'))

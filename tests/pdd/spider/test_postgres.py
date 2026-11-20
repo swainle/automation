@@ -21,6 +21,16 @@ def test_connection_uses_only_ods_schema_and_beijing_timezone(monkeypatch):
     assert '-c default_transaction_read_only=on' in options
 
 
+@pytest.mark.parametrize('readonly', [False, True])
+def test_connection_keeps_idle_mobile_sessions_alive(monkeypatch, readonly):
+    connect_driver = Mock()
+    monkeypatch.setattr(psycopg, 'connect', connect_driver)
+    connect('postgresql://localhost/test', readonly=readonly)
+    kwargs = connect_driver.call_args.kwargs
+    assert {key: kwargs[key] for key in ('keepalives', 'keepalives_idle', 'keepalives_interval', 'keepalives_count')} == {
+        'keepalives': 1, 'keepalives_idle': 60, 'keepalives_interval': 30, 'keepalives_count': 5}
+
+
 @pytest.fixture
 def snapshot(pg_database, tmp_path):
     store = Store()

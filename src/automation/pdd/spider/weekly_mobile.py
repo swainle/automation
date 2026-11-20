@@ -1,4 +1,4 @@
-"""One immutable weekly ranking snapshot; resume unfinished product steps."""
+"""Collect weekly mobile products and resume unfinished steps."""
 import json
 import re
 import sys
@@ -6,6 +6,7 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
+from statistics import median
 
 from automation.pdd.spider import config, ios, longshot
 from automation.pdd.spider.crop import save_product
@@ -41,6 +42,68 @@ def product_element(client, title, *, occurrence=1):
             raise RuntimeError('榜单标题元素发生变化，停止点击')
         elements[occurrence - 1].tap()
     return SimpleNamespace(displayed=displayed, tap=tap)
+
+
+def locate_product(client, entry, rows, rank):
+    """Use full-board coordinates to approach, then correct against live title positions."""
+    title = next(row['标题'] for row in rows if int(row['排行']) == rank)
+    occurrence = sum(row['标题'] == title for row in rows if int(row['排行']) <= rank)
+    baseline = sorted(client.__dict__.get('_rank_top_elements', []), key=lambda e: e.get('order', 0))
+    titles = {row['标题'] for row in rows}
+    original = {}
+    for element in baseline:
+        if element['type'] == 'StaticText' and element['text'] in titles:
+            original.setdefault(element['text'], []).append(element)
+    if len(original.get(title, [])) < occurrence:
+        raise RuntimeError(f'完整榜单中无法确认排名 {rank} 的标题位置')
+    target = original[title][occurrence - 1]
+    width, height = ios._get_window_size(client)
+    last_offset, stalled = None, 0
+    for _ in range(40):
+        ios.require_pdd_foreground(client)
+        xml = wait_for_elements(lambda: ios._current_page_source(client))
+        elements = ios._xcui_texts(xml)
+        visible = {order for order, node in enumerate(ET.fromstring(xml).iter()) if node.get('visible') == 'true'}
+        main = ios._rank_details(elements, TAB_TO_CLASS[entry['tab']])['主榜单名称']
+        if main != entry['main_name'] or ios._guess_tab(elements) != entry['tab']:
+            raise FatalWorkflowError('定位期间榜单或子榜变化，停止点击')
+        current = {}
+        for element in sorted(elements, key=lambda e: e.get('order', 0)):
+            if element['type'] == 'StaticText' and element['text'] in titles:
+                current.setdefault(element['text'], []).append(element)
+        offsets = []
+        for text, nodes in current.items():
+            old = original.get(text, [])
+            if len(nodes) == len(old):
+                offsets.extend(a['y'] - b['y'] for a, b in zip(old, nodes)
+                               if b['order'] in visible and b['w'] > 0 and b['h'] > 0 and 0 <= b['x'] < width
+                               and height * .15 < b['y'] < height * .85)
+        if not offsets:
+            raise RuntimeError('可见范围没有可对应的榜单标题，停止盲目滑动')
+        offset = median(offsets)
+        print(f'[定位] 排名 {rank}，当前滚动位置 {offset:.0f}pt', flush=True)
+        matches = current.get(title, [])
+        node = matches[occurrence - 1] if len(matches) == len(original[title]) else None
+        if node and node['order'] in visible and node['w'] > 0 and node['h'] > 0 and 0 <= node['x'] < width and (
+                height * .2 <= node['y'] and node['y'] + node['h'] <= height * .8):
+            def tap():
+                if not ios._tap_xy(client, node['x'] + node['w'] / 2,
+                                   node['y'] + node['h'] / 2, f'排行 {rank}：{title}'):
+                    raise RuntimeError('点击排行商品失败')
+            return SimpleNamespace(displayed=True, tap=tap)
+        stalled = stalled + 1 if last_offset is not None and abs(offset - last_offset) < 3 else 0
+        if stalled >= 2:
+            raise RuntimeError('连续滑动无位移，未定位到目标商品')
+        delta = target['y'] - offset - height * .45
+        limit = height * (.65 if abs(delta) > height * .7 else .18)
+        travel = max(-limit, min(limit, delta))
+        if abs(travel) < 3:
+            raise RuntimeError('目标位置与当前标题不一致，停止点击')
+        start = height * (.82 if travel > 0 else .17)
+        longshot.drag_for_screenshot(client, width / 2, start, start - travel)
+        time.sleep(.25)
+        last_offset = offset
+    raise RuntimeError('超过定位滑动次数，未点击商品')
 
 
 class WeeklyProduct(IosProduct):
@@ -149,7 +212,11 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
     targets = [i for i in items if (i['product_state'] == WEBVIEW_SKIP if only_webview
                else i['product_state'] not in {'completed', WEBVIEW_SKIP} or i['rank_state'] not in {'completed', WEBVIEW_SKIP})]
     if single_round:
-        targets = [i for i in items if i['mobile_state'] != 'completed' and (product_id is None or i['id'] == product_id)]
+        saved = {i['rank']: i for i in items}
+        targets = [saved.get(int(row['排行']), dict(id=None, rank=int(row['排行']),
+                   directory=str(Path(entry['directory']) / f"榜{int(row['排行']):02d}")))
+                   for row in live_rows if (int(row['排行']) not in saved or saved[int(row['排行'])]['mobile_state'] != 'completed')
+                   and (product_id is None or saved.get(int(row['排行']), {}).get('id') == product_id)]
     if not targets:
         return
     live_by_rank = {int(r['排行']): r for r in live_rows}
@@ -157,7 +224,8 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
     # on resume, but never repeats a completed data/image collection step.
     # Longshot capture invalidates its stale coordinates; a newly opened board
     # can reuse its fresh snapshot instead of another full XML read.
-    scroll_top(client, entry['main_name'], entry['tab'], live_rows, client.__dict__.get('_rank_last_elements', []))
+    if not single_round:
+        scroll_top(client, entry['main_name'], entry['tab'], live_rows, client.__dict__.get('_rank_last_elements', []))
     collector = WeeklyProduct(store, client)
     pending = list(targets)
     last_errors = []
@@ -171,14 +239,13 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
             occurrence = sum(r['标题'] == title for r in live_rows if int(r['排行']) <= item['rank'])
             folder = Path(item['directory'])
             opened = False
-            store.item_state(item['id'], 'running')
-            store.product_state(item['id'], 'running')
-            if single_round:
-                with store.db.transaction():
-                    store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='running' WHERE id=%s", (item['id'],))
+            if not single_round:
+                store.item_state(item['id'], 'running')
+                store.product_state(item['id'], 'running')
             try:
                 print(f"[商品] 排行 {item['rank']}：定位当前榜单标题", flush=True)
-                element = product_element(client, title, occurrence=occurrence)
+                element = (locate_product(client, entry, live_rows, item['rank']) if single_round
+                           else product_element(client, title, occurrence=occurrence))
                 if not element.displayed:
                     width, height = ios._get_window_size(client)
                     for _ in range(12):
@@ -214,6 +281,18 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                 normalize = lambda value: re.sub(r'\s|\u200b', '', value)
                 if not any(normalize(title) in normalize(text) for text in page['title_candidates']):
                     raise RuntimeError(f'商品身份不符，停止保存：目标 {title}；实际 {page["observed_title"]}')
+                if single_round:
+                    if item['id'] is not None and normalize(title) not in normalize(item['title']):
+                        from automation.pdd.spider.unified import reset_mobile
+                        reset_mobile(store, item, row)
+                        with store.db.transaction():
+                            store.db.execute("""UPDATE t_pdd_ranking_products SET platform_product_id='',
+                                platform_product_link='',listing_date=NULL,sogou_state='pending' WHERE id=%s""", (item['id'],))
+                    item = store.save_item(list_id, entry['directory'], row)
+                    store.item_state(item['id'], 'running')
+                    store.product_state(item['id'], 'running')
+                    with store.db.transaction():
+                        store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='running' WHERE id=%s", (item['id'],))
                 row = dict(row, 商品页标题=page['observed_title'] or title)
                 screenshot = folder / '产品截图.jpg'
                 if item['product_screenshot_state'] != 'completed':
@@ -226,18 +305,22 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                     with store.db.transaction():
                         store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='completed' WHERE id=%s", (item['id'],))
             except WebviewElementSkip as error:
-                if single_round:
+                if single_round and item['id'] is not None:
                     with store.db.transaction():
                         store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='failed' WHERE id=%s", (item['id'],))
-                store.product_state(item['id'], WEBVIEW_SKIP, reason=str(error))
-                store.item_state(item['id'], WEBVIEW_SKIP)
+                if item['id'] is not None:
+                    store.product_state(item['id'], WEBVIEW_SKIP, reason=str(error))
+                    store.item_state(item['id'], WEBVIEW_SKIP)
+                if single_round:
+                    errors.append(f"排行{item['rank']}：{error}")
                 print(f"[商品] 排行 {item['rank']}：{WEBVIEW_SKIP}", flush=True)
             except Exception as error:
-                if single_round:
+                if single_round and item['id'] is not None:
                     with store.db.transaction():
                         store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='failed' WHERE id=%s", (item['id'],))
-                store.product_state(item['id'], 'failed', reason=str(error))
-                store.item_state(item['id'], 'failed')
+                if item['id'] is not None:
+                    store.product_state(item['id'], 'failed', reason=str(error))
+                    store.item_state(item['id'], 'failed')
                 errors.append(f"排行{item['rank']}：{error}")
                 print(f"[商品] {errors[-1]}", flush=True)
                 # 单个商品失败不中止整榜：继续采集下一个商品，仅在致命错误时停止。
