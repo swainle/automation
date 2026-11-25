@@ -1,5 +1,6 @@
 """Run the mobile ranking and product pipeline."""
 import argparse
+from datetime import date
 import psycopg
 
 
@@ -11,7 +12,16 @@ def main(argv=None):
     parser.add_argument('--switch-to', metavar='YYYY-MM-DD', help='目标采集日期（须无数据）')
     parser.add_argument('--ranking-id', type=int)
     parser.add_argument('--ranking-product-id', type=int)
+    parser.add_argument('--capture-date', metavar='YYYY-MM-DD', help='配合 --check 查看指定采集日期的榜单及商品；默认全部')
     args = parser.parse_args(argv)
+    if args.capture_date:
+        if not args.check:
+            parser.error('--capture-date 仅用于 --check')
+        try:
+            if date.fromisoformat(args.capture_date).isoformat() != args.capture_date:
+                raise ValueError
+        except ValueError:
+            parser.error('--capture-date 必须是有效日期，格式 YYYY-MM-DD')
     if any(value is not None and value < 1 for value in (args.ranking_id, args.ranking_product_id)):
         parser.error('数据库 ID 必须大于零')
     if bool(args.switch_data) != bool(args.switch_to):
@@ -32,7 +42,7 @@ def main(argv=None):
     from automation.pdd.spider import config
     if args.check:
         from automation.pdd.spider.health import run
-        return run(args.ranking_id, args.ranking_product_id)
+        return run(args.ranking_id, args.ranking_product_id, args.capture_date)
     from automation.pdd.spider.unified import collect
     from types import SimpleNamespace
     from automation.pdd.spider.commands import execute

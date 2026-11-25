@@ -4,6 +4,72 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from automation.pdd.spider.ios_product import IosProduct
+from automation.pdd.spider.weekly_mobile import WeeklyProduct
+
+
+PARAMETERS = '''<XCUIElementTypeApplication width="375" height="812">
+    <XCUIElementTypeStaticText name="商品参数" visible="true" x="152" y="259" width="72" height="25"/>
+    <XCUIElementTypeButton name="关闭" visible="true" x="341" y="251" width="32" height="40"/>
+    <XCUIElementTypeButton name="分享" visible="true" x="330" y="50" width="32" height="40"/>
+    </XCUIElementTypeApplication>'''
+PRODUCT = '<XCUIElementTypeApplication width="375" height="812"><XCUIElementTypeStaticText name="商品" visible="true"/></XCUIElementTypeApplication>'
+
+
+@pytest.mark.parametrize('kind', [IosProduct, WeeklyProduct])
+@pytest.mark.parametrize('still_open', [False, True])
+def test_parameters_popup_is_closed_and_verified(monkeypatch, kind, still_open):
+    collector = kind(Mock(), Mock())
+    collector.tap = Mock()
+    read = Mock(side_effect=[PARAMETERS, PARAMETERS if still_open else PRODUCT])
+    monkeypatch.setattr('automation.pdd.spider.ios._current_page_source', read)
+    if still_open:
+        with pytest.raises(RuntimeError, match='关闭后仍未消失'):
+            collector.snapshot()
+    else:
+        assert collector.snapshot().find('XCUIElementTypeStaticText').get('name') == '商品'
+    assert collector.source_reads == 2
+    collector.tap.assert_called_once()
+    assert collector.tap.call_args.args[0].get('name') == '关闭'
+
+
+def test_inline_parameters_entry_is_not_a_popup(monkeypatch):
+    collector = IosProduct(Mock(), Mock())
+    xml = PARAMETERS.replace('x="152"', 'x="12"')
+    monkeypatch.setattr('automation.pdd.spider.ios._current_page_source', Mock(return_value=xml))
+    collector.tap = Mock()
+    collector.snapshot()
+    collector.tap.assert_not_called()
+
+
+def test_parameters_without_unique_close_button_stops(monkeypatch):
+    collector = IosProduct(Mock(), Mock())
+    xml = PARAMETERS.replace('</XCUIElementTypeApplication>', '<XCUIElementTypeButton visible="true" x="330" y="251" width="32" height="40"/></XCUIElementTypeApplication>')
+    monkeypatch.setattr('automation.pdd.spider.ios._current_page_source', Mock(return_value=xml))
+    collector.tap = Mock()
+    with pytest.raises(RuntimeError, match='唯一关闭按钮'):
+        collector.snapshot()
+    collector.tap.assert_not_called()
+
+
+def test_parameters_close_icon_is_exposed_as_static_text(monkeypatch):
+    collector = WeeklyProduct(Mock(), Mock())
+    xml = PARAMETERS.replace('XCUIElementTypeButton name="关闭"', 'XCUIElementTypeStaticText value="\ue8f2"')
+    monkeypatch.setattr('automation.pdd.spider.ios._current_page_source', Mock(side_effect=[xml, PRODUCT]))
+    monkeypatch.setattr('automation.pdd.spider.ios_product.time.sleep', Mock())
+    collector.snapshot()
+    collector.client.click.assert_called_once_with(357, 271)
+    assert collector.source_reads == 2
+
+
+def test_weekly_initial_snapshot_closes_parameters(monkeypatch):
+    collector = WeeklyProduct(Mock(), Mock())
+    collector.tap = Mock()
+    read = Mock(return_value=PRODUCT)
+    monkeypatch.setattr('automation.pdd.spider.ios._current_page_source', read)
+    collector.snapshot(initial_xml=PARAMETERS)
+    assert collector.source_reads == 1
+    collector.tap.assert_called_once()
+    assert collector.root.find('XCUIElementTypeStaticText').get('name') == '商品'
 
 
 VIDEO = '''<App><XCUIElementTypeButton name="pdd gallery bar back remove bg"

@@ -15,7 +15,7 @@ from automation.pdd.screenshot.runner import ShopRunner
 def test_runtime_paths_and_business_environment(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
-    business = tmp_path / "automation.pdd.screenshot"
+    business = project / "automation.pdd.screenshot"
     business.mkdir()
     (project / ".env").write_text("AUTOMATION_WS_PORT=9999\n", encoding="utf-8")
     (business / ".env").write_text("AUTOMATION_WS_PORT=9001\nCOOKIES_DIR=inputs/cookies\nCS_SSH_KEY=keys/id_ed25519\nPDD_SCREENSHOT_ONCE=true\n", encoding="utf-8")
@@ -109,7 +109,7 @@ def test_init_preserves_existing_configuration_and_data(tmp_path):
     from automation.pdd.screenshot.initialize import initialize
     project = tmp_path / "project"
     business = runtime_root(project)
-    business.mkdir()
+    business.mkdir(parents=True)
     original = b"# existing settings\r\nFEISHU_APP_SECRET=fixture\r\n"
     (business / ".env").write_bytes(original)
     (business / "data").mkdir()

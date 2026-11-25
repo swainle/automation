@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 
 from psycopg import sql
+from psycopg.types.json import Jsonb
 
 from automation.pdd.spider.mobile_database import Store, TABLES, columns
 
@@ -16,7 +17,9 @@ def read_sqlite(path):
     try:
         if db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or db.execute('PRAGMA foreign_key_check').fetchone():
             raise ValueError('SQLite 完整性或外键检查失败，未迁移')
-        return {table: [dict(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY id')]
+        present = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        return {table: [] if table == 'product_analysis' and table not in present else
+                [dict(row) for row in db.execute(f'SELECT * FROM {table} ORDER BY id')]
                 for table in (name.removeprefix('t_pdd_') for name in TABLES)}
     finally:
         db.close()
@@ -51,20 +54,26 @@ def merge(latest, legacy):
                 continue
             else:
                 row['ranking_product_id'] = product_ids[row['ranking_product_id']]
+                if table == 'product_analysis' and row.get('matched_product_id') is not None:
+                    row['matched_product_id'] = product_ids.get(row['matched_product_id'])
             next_id += 1
             row['id'] = next_id
             result[table].append(row)
+    from automation.pdd.spider.mobile_database import PRODUCT_COLUMNS
+    from automation.pdd.spider.migrate_states import removed_columns
     for row in result['ranking_products']:
-        row.setdefault('mobile_state', 'completed' if row['rank_state'] == row['product_state'] == 'completed' else 'pending')
-        row.setdefault('sogou_state', 'completed' if all(row.get(key) for key in
-            ('platform_product_id', 'platform_product_link', 'listing_date')) else 'pending')
+        for column in PRODUCT_COLUMNS:
+            row.setdefault(column, 'pending')
+        for column in removed_columns('t_pdd_ranking_products', set(row)):
+            row.pop(column)
     for row in result['rankings']:
-        row.setdefault('web_collected_at', None)
-        products = [item for item in result['ranking_products'] if item['ranking_id'] == row['id']]
-        row['collect_state'] = 'completed' if products and all(
-            item['mobile_state'] == item['sogou_state'] == 'completed' for item in products) else 'pending'
-        if row['collect_state'] != 'completed':
-            row['completed_at'] = None
+        row.setdefault('state', {'failed': 'retry_pending', 'webview_element_skip': 'unavailable'}.get(
+            row.get('collect_state'), row.get('collect_state', 'pending')))
+        for column in removed_columns('t_pdd_rankings', set(row)):
+            row.pop(column)
+    for row in result.get('product_analysis', []):
+        if isinstance(row.get('match_evidence'), str):
+            row['match_evidence'] = json.loads(row['match_evidence'])
     return result
 
 
@@ -90,7 +99,8 @@ def migrate(sqlite_path, legacy_backup, dsn):
                     fields = list(row)
                     store.db.execute(sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(
                         sql.Identifier('ods', table), sql.SQL(',').join(map(sql.Identifier, fields)),
-                        sql.SQL(',').join(sql.Placeholder() for _ in fields)), list(row.values()))
+                        sql.SQL(',').join(sql.Placeholder() for _ in fields)),
+                        [Jsonb(value) if isinstance(value, (dict, list)) else value for value in row.values()])
                 actual = store.db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(sql.Identifier('ods', table))).fetchall()
                 if actual != sorted(values, key=lambda row: row['id']):
                     raise ValueError(f'{table} 迁移后逐字段核对失败，已回滚')

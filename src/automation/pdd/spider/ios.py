@@ -164,9 +164,10 @@ def ensure_wda(debug: bool = False):
     """
     import wda
 
-    # 单次 WDA HTTP 请求超时上限。wda 默认 180s，太长了——真机大 WebView 的
-    # source() 慢或偶发阻塞时会无输出地卡 3 分钟，看起来像"卡死"。压到 30s。
-    wda.HTTP_TIMEOUT = 30.0
+    # 单次 WDA HTTP 请求超时上限。wda 默认 180s。某些商品详情页是超大 WebView，
+    # source() 序列化整棵元素树需要远超 30s，压到 30s 会把这些慢页面误判为卡死
+    # 并触发致命错误。保留 180s 以兼容超大详情页。
+    wda.HTTP_TIMEOUT = 180.0
 
     if debug:
         if not wda_ready():
@@ -1102,7 +1103,7 @@ _WINDOW_SIZE_CACHE = None
 
 def require_pdd_foreground(client):
     from automation.pdd.spider.workflow import FatalWorkflowError
-    info = client.http.get('/wda/activeAppInfo', timeout=3).value
+    info = client.http.get('/wda/activeAppInfo', timeout=30).value
     bundle = info.get('bundleId')
     if bundle == PDD_BUNDLE_ID:
         return

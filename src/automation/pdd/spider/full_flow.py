@@ -160,12 +160,31 @@ def dismiss_sku_panel(client):
     raise RuntimeError('点击关闭后 SKU 面板仍未消失，未截图')
 
 
+class ProductUnavailable(RuntimeError):
+    """A visible product page explicitly cannot accept further group orders."""
+
+
+def product_unavailable_reason(xml):
+    if not xml:
+        return ''
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return ''  # The normal page validator reports malformed snapshots.
+    for node in root.iter():
+        if node.get('visible') == 'false' or not node.tag.endswith(('Button', 'StaticText')):
+            continue
+        if any('发起拼单名额已满' in re.sub(r'\s+', '', node.get(key) or '') for key in ('label', 'name', 'value')):
+            return '发起拼单名额已满'
+    return ''
+
+
 def product_page_checks(xml, title):
     """Verify product-page structure; the fresh share URL establishes identity."""
     elements = ios._xcui_texts(xml) if xml else []
-    normalized = re.sub(r'\s|\u200b', '', title)
+    normalized = re.sub(r'[\s\u200b【】]', '', title)
     matches = bool(normalized) and any(
-        re.sub(r'\s|\u200b', '', element['text']) == normalized for element in elements)
+        re.sub(r'[\s\u200b【】]', '', element['text']) == normalized for element in elements)
     nodes = list(ET.fromstring(xml).iter()) if xml else []
     share = any(node.tag == 'XCUIElementTypeButton' and node.get('visible') != 'false'
                 and (node.get('label') or node.get('name')) == '分享' for node in nodes)
@@ -176,7 +195,7 @@ def product_page_checks(xml, title):
     # Native pages may expose the real title as Image/Other rather than StaticText.
     candidates = [element['text'] for element in elements
                   if element['type'] in ('Image', 'Other', 'StaticText') and 8 <= len(element['text']) <= 300]
-    observed = next((text for text in candidates if normalized and normalized in re.sub(r'\s|\u200b', '', text)), '')
+    observed = next((text for text in candidates if normalized and normalized in re.sub(r'[\s\u200b【】]', '', text)), '')
     if not observed:
         observed = next((node.get('label') or node.get('name') or '' for node in nodes
                          if node.tag == 'XCUIElementTypeImage' and node.get('visible') != 'false'

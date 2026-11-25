@@ -1,4 +1,4 @@
-"""运行配置，读取项目相邻的业务工作目录 .env；远程命令由用户显式配置。"""
+"""运行配置，读取项目下的业务工作目录 .env；远程命令由用户显式配置。"""
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,7 +71,7 @@ class Config:
 
 def runtime_root(project_root=None):
     project_root = Path.cwd() if project_root is None else Path(project_root)
-    return project_root.resolve().parent / "automation.pdd.screenshot"
+    return project_root.resolve() / "automation.pdd.screenshot"
 
 
 def load_environment(project_root=None):

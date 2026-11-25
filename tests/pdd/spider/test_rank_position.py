@@ -4,9 +4,18 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from PIL import Image
 
 from automation.pdd.spider import unified, weekly_mobile as flow
-from automation.pdd.spider.mobile_database import Store
+from automation.pdd.spider.mobile_database import Store, PRODUCT_COLUMNS
+
+
+@pytest.fixture(autouse=True)
+def mock_analysis(monkeypatch):
+    runner = Mock()
+    runner.process.return_value = runner.is_complete.return_value = True
+    runner.has_failed.return_value = False
+    monkeypatch.setattr(unified, 'AnalysisRunner', Mock(return_value=runner))
 
 
 def title(text, y, order):
@@ -151,15 +160,16 @@ def test_first_capture_inserts_only_after_entering_and_verifying_product(tmp_pat
     top.assert_not_called()
 
 
-def test_partial_completed_rows_do_not_hide_uninserted_ranks(monkeypatch):
-    entry = dict(id=1, product_count=3)
+def test_partial_completed_rows_do_not_hide_uninserted_ranks(monkeypatch, tmp_path):
+    entry = dict(id=1, product_count=3, directory=str(tmp_path))
+    Image.new('RGB', (20, 20)).save(tmp_path / '榜单长图.jpg')
     store = Mock()
     store.db.execute.return_value.fetchone.return_value = {'id': 1}
     store.list.return_value = entry
-    items = [dict(id=1, mobile_state='completed', sogou_state='pending')]
+    items = [dict(id=1, **dict.fromkeys(PRODUCT_COLUMNS, 'completed'))]
     store.items.side_effect = lambda _: list(items)
     def mobile(*args, **kwargs):
-        items.extend([dict(id=i, mobile_state='completed', sogou_state='pending') for i in (2, 3)])
+        items.extend([dict(id=i, **dict.fromkeys(PRODUCT_COLUMNS, 'completed')) for i in (2, 3)])
         return 3
     run = Mock(side_effect=mobile)
     monkeypatch.setattr(unified, 'mobile_round', run)
@@ -169,7 +179,6 @@ def test_partial_completed_rows_do_not_hide_uninserted_ranks(monkeypatch):
 
 def test_resume_same_product_preserves_completed_stages(tmp_path, monkeypatch):
     item = dict(id=1, rank=1, title='一 商品页标题', directory=str(tmp_path / '榜01'),
-                mobile_state='failed', product_state='failed', rank_state='failed',
                 product_screenshot_state='completed', main_images_state='completed')
     store = Mock()
     store.items.return_value = [item]
@@ -195,13 +204,14 @@ def test_status_total_includes_products_not_inserted_yet(monkeypatch):
     from automation.pdd.spider import health
     db = Mock()
     db.execute.return_value.fetchall.return_value = [dict(id=1, main_name='猫粮', tab_name='畅销榜',
-        web_collected_at=None, total=20, mobile_done=1, web_done=0)]
+        state='running', total=20, done=1, identity_done=0, matched_done=0, point_done=0, skipped=0, failed=0)]
     monkeypatch.setattr(health, 'columns', lambda *_: {'product_count'})
     display = Mock()
     monkeypatch.setattr(health, 'table', display)
+    monkeypatch.setattr(unified, 'check', Mock())
     health.collection_status(db)
     assert 'GREATEST(COUNT(p.id),r.product_count)' in db.execute.call_args.args[0]
-    assert display.call_args.args[2][0][2] == '1/20'
+    assert display.call_args.args[2][0][3] == '1/20'
 
 
 def test_refresh_keeps_completed_crops_and_identical_long_image(tmp_path, monkeypatch):
@@ -209,7 +219,7 @@ def test_refresh_keeps_completed_crops_and_identical_long_image(tmp_path, monkey
                  source_name='猫粮', source_url='https://example.com/rank')
     rows = [{'排行': 1, '标题': '一'}, {'排行': 2, '标题': '二'}]
     store = Mock()
-    store.items.return_value = [dict(id=11, rank=1, mobile_state='completed')]
+    store.items.return_value = [dict(id=11, rank=1, **dict.fromkeys(PRODUCT_COLUMNS, 'completed'))]
     (tmp_path / '榜01').mkdir()
     done = tmp_path / '榜01/产品榜单截图.jpg'
     done.write_bytes(b'keep')
@@ -230,6 +240,7 @@ def test_refresh_keeps_completed_crops_and_identical_long_image(tmp_path, monkey
             (folder / '产品榜单截图.jpg').write_bytes(b'new')
     capture_mock = Mock(side_effect=capture)
     monkeypatch.setattr(unified.longshot, 'capture', capture_mock)
+    monkeypatch.setattr('automation.pdd.spider.full_flow.valid_image', lambda p: p.is_file())
     monkeypatch.setattr(flow, 'run_products', Mock())
     refreshed = set()
     for _ in range(2):

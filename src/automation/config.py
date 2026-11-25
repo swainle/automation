@@ -1,10 +1,11 @@
 """Resolve runtime files from the working directory, including uvx installs."""
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-ROOT = Path.cwd().resolve()
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path.cwd().resolve()
 
 
 def load_environment(root=None):

@@ -14,9 +14,9 @@ from automation.pdd.spider.mobile_files import cleanup_ranking, merge_details
 from automation.pdd.spider.mobile_page import WebviewElementSkip, require_elements, wait_for_elements
 from automation.pdd.spider.database import today
 from automation.pdd.spider.full_flow import (prepare_top, dismiss_sku_panel,
-    product_page_checks, return_to_board, valid_image)
+    product_page_checks, return_to_board, valid_image, ProductUnavailable, product_unavailable_reason)
 from automation.pdd.spider.ios_product import IosProduct, label
-from automation.pdd.spider.mobile_database import WEBVIEW_SKIP, week_start
+from automation.pdd.spider.mobile_database import WEBVIEW_SKIP, week_start, product_complete, product_status, PRODUCT_COLUMNS
 from automation.pdd.spider.rank import TAB_TO_CLASS, read_leaderboards
 from automation.pdd.spider.rank.current import read_tab
 from automation.pdd.spider.workflow import FatalWorkflowError
@@ -139,7 +139,11 @@ class WeeklyProduct(IosProduct):
             return self.xml
         try:
             self.xml = wait_for_elements(read, initial_xml=initial_xml)
+            reason = product_unavailable_reason(self.xml)
+            if reason:
+                raise ProductUnavailable(reason)
             self.root = ET.fromstring(self.xml)
+            self.dismiss_parameters()
         except Exception as error:
             self._source_error = error
             raise
@@ -189,7 +193,7 @@ class WeeklyProduct(IosProduct):
 
 def capture_ranking(store, client, entry, rows, elements):
     list_id, directory = entry['id'], Path(entry['directory'])
-    if entry['screenshot_state'] != 'completed':
+    if not valid_image(directory / '榜单长图.jpg') or any(i['ranking_product_screenshot_state'] != 'completed' for i in store.items(list_id)):
         store.stage_state(list_id, 'ranking_long_screenshot', 'running')
         xml, elements = prepare_top(client, entry['main_name'], entry['tab'], rows, elements)
         xml = wait_for_elements(lambda: ios._current_page_source(client), initial_xml=xml)
@@ -203,19 +207,20 @@ def capture_ranking(store, client, entry, rows, elements):
     for row in rows:
         if not valid_image(directory / f"榜{int(row['排行']):02d}/产品榜单截图.jpg"):
             raise RuntimeError(f"排行 {row['排行']} 缺少有效的榜单裁剪图")
+    for item in store.items(list_id):
+        store.stage_state(list_id, 'ranking_product_screenshot', 'completed', item_id=item['id'])
 
 
-def run_products(store, client, entry, live_rows, *, only_webview=False, single_round=False, product_id=None):
+def run_products(store, client, entry, live_rows, *, only_webview=False, single_round=False, product_id=None, analysis=None):
     from automation.pdd.spider.full_flow import prepare_top as scroll_top
     list_id = entry['id']
     items = store.items(list_id)
-    targets = [i for i in items if (i['product_state'] == WEBVIEW_SKIP if only_webview
-               else i['product_state'] not in {'completed', WEBVIEW_SKIP} or i['rank_state'] not in {'completed', WEBVIEW_SKIP})]
+    targets = [i for i in items if not product_complete(i)]
     if single_round:
         saved = {i['rank']: i for i in items}
         targets = [saved.get(int(row['排行']), dict(id=None, rank=int(row['排行']),
                    directory=str(Path(entry['directory']) / f"榜{int(row['排行']):02d}")))
-                   for row in live_rows if (int(row['排行']) not in saved or saved[int(row['排行'])]['mobile_state'] != 'completed')
+                   for row in live_rows if (int(row['排行']) not in saved or not product_complete(saved[int(row['排行'])]))
                    and (product_id is None or saved.get(int(row['排行']), {}).get('id') == product_id)]
     if not targets:
         return
@@ -239,9 +244,6 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
             occurrence = sum(r['标题'] == title for r in live_rows if int(r['排行']) <= item['rank'])
             folder = Path(item['directory'])
             opened = False
-            if not single_round:
-                store.item_state(item['id'], 'running')
-                store.product_state(item['id'], 'running')
             try:
                 print(f"[商品] 排行 {item['rank']}：定位当前榜单标题", flush=True)
                 element = (locate_product(client, entry, live_rows, item['rank']) if single_round
@@ -272,13 +274,22 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                     except RuntimeError:
                         pass
                     return not product_page_checks(source, title)[0]
-                xml = wait_for_elements(lambda: ios._current_page_source(client),
+                def read_product_source():
+                    source = ios._current_page_source(client)
+                    reason = product_unavailable_reason(source)
+                    if reason:
+                        raise ProductUnavailable(reason)
+                    return source
+                xml = wait_for_elements(read_product_source,
                                         timeout=180,
                                         ready=page_ready)
+                reason = product_unavailable_reason(xml)
+                if reason:
+                    raise ProductUnavailable(reason)
                 reasons, page = product_page_checks(xml, title)
                 if reasons:
                     raise RuntimeError('未确认当前商品页：' + '；'.join(reasons))
-                normalize = lambda value: re.sub(r'\s|\u200b', '', value)
+                normalize = lambda value: re.sub(r'[\s\u200b【】]', '', value)
                 if not any(normalize(title) in normalize(text) for text in page['title_candidates']):
                     raise RuntimeError(f'商品身份不符，停止保存：目标 {title}；实际 {page["observed_title"]}')
                 if single_round:
@@ -287,12 +298,10 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                         reset_mobile(store, item, row)
                         with store.db.transaction():
                             store.db.execute("""UPDATE t_pdd_ranking_products SET platform_product_id='',
-                                platform_product_link='',listing_date=NULL,sogou_state='pending' WHERE id=%s""", (item['id'],))
+                                platform_product_link='',listing_date=NULL WHERE id=%s""", (item['id'],))
                     item = store.save_item(list_id, entry['directory'], row)
-                    store.item_state(item['id'], 'running')
-                    store.product_state(item['id'], 'running')
-                    with store.db.transaction():
-                        store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='running' WHERE id=%s", (item['id'],))
+                    crop_state = 'completed' if valid_image(folder / '产品榜单截图.jpg') else 'failed'
+                    store.stage_state(list_id, 'ranking_product_screenshot', crop_state, item_id=item['id'])
                 row = dict(row, 商品页标题=page['observed_title'] or title)
                 screenshot = folder / '产品截图.jpg'
                 if item['product_screenshot_state'] != 'completed':
@@ -300,27 +309,27 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
                     save_product(client.screenshot().convert('RGB'), screenshot)
                     store.stage_state(list_id, 'product_screenshot', 'completed', item_id=item['id'])
                 collector.collect(item, folder, row, initial_xml=xml)
-                store.item_state(item['id'], 'completed')
+                if analysis is not None:
+                    analysis.process(store.item(item['id']))
+
+            except ProductUnavailable as error:
                 if single_round:
-                    with store.db.transaction():
-                        store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='completed' WHERE id=%s", (item['id'],))
+                    if item['id'] is not None and re.sub(r'[\s\u200b【】]', '', title) not in re.sub(r'[\s\u200b【】]', '', item['title']):
+                        from automation.pdd.spider.unified import reset_mobile
+                        reset_mobile(store, item, row)
+                        store.db.execute("UPDATE t_pdd_ranking_products SET platform_product_id='',platform_product_link='',listing_date=NULL WHERE id=%s", (item['id'],))
+                    item = store.save_item(list_id, entry['directory'], row)
+                store.skip_product(item['id'], str(error))
+                print(f"[商品] 排行 {item['rank']}：{error}，已跳过", flush=True)
             except WebviewElementSkip as error:
-                if single_round and item['id'] is not None:
-                    with store.db.transaction():
-                        store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='failed' WHERE id=%s", (item['id'],))
                 if item['id'] is not None:
                     store.product_state(item['id'], WEBVIEW_SKIP, reason=str(error))
-                    store.item_state(item['id'], WEBVIEW_SKIP)
                 if single_round:
                     errors.append(f"排行{item['rank']}：{error}")
                 print(f"[商品] 排行 {item['rank']}：{WEBVIEW_SKIP}", flush=True)
             except Exception as error:
-                if single_round and item['id'] is not None:
-                    with store.db.transaction():
-                        store.db.execute("UPDATE t_pdd_ranking_products SET mobile_state='failed' WHERE id=%s", (item['id'],))
                 if item['id'] is not None:
                     store.product_state(item['id'], 'failed', reason=str(error))
-                    store.item_state(item['id'], 'failed')
                 errors.append(f"排行{item['rank']}：{error}")
                 print(f"[商品] {errors[-1]}", flush=True)
                 # 单个商品失败不中止整榜：继续采集下一个商品，仅在致命错误时停止。
@@ -355,7 +364,7 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
         if single_round or attempt + 1 >= config.RETRY_ATTEMPTS:
             break
         # 整个榜单采集一遍后，补采本轮失败的商品，最多重试 config.RETRY_ATTEMPTS 次。
-        pending = [i for i in store.items(list_id) if i['product_state'] == 'failed']
+        pending = [i for i in store.items(list_id) if not product_complete(i)]
         if not pending:
             return
         print(f'[榜单] 本轮 {len(errors)} 个商品失败，补采剩余 {len(pending)} 个失败商品（{attempt + 2}/{config.RETRY_ATTEMPTS}）', flush=True)
@@ -366,10 +375,9 @@ def run_products(store, client, entry, live_rows, *, only_webview=False, single_
 def collect_sources(store, runtime, *, only_webview=False):
     from automation.pdd.spider.navigation import open_app_board
     if only_webview:
-        entries = [store.list(r['id']) for r in store.db.execute('''SELECT r.id FROM t_pdd_rankings r
-            WHERE r.week_start=%s AND (r.collect_state=%s OR EXISTS(SELECT 1 FROM t_pdd_ranking_products p
-            WHERE p.ranking_id=r.id AND p.product_state=%s)) ORDER BY r.source_order,r.tab_index''',
-            (week_start(today()), WEBVIEW_SKIP, WEBVIEW_SKIP))]
+        entries = [store.list(r['id']) for r in store.db.execute(
+            "SELECT id FROM t_pdd_rankings WHERE week_start=%s AND state<>'completed' ORDER BY source_order,tab_index",
+            (week_start(today()),))]
     else:
         sources = read_leaderboards(config.EXCEL_PATH)
         if not sources:
@@ -386,7 +394,7 @@ def collect_sources(store, runtime, *, only_webview=False):
                 images = json.loads(item['product_json'])['images']
                 merge_details([Path(item['directory']) / r['local_path'] for r in images if r['image_type'] == 'detail'], output)
         cleanup_ranking(entry['directory'])
-        if not only_webview and entry['collect_state'] in {'completed', WEBVIEW_SKIP}:
+        if not only_webview and entry['state'] == 'completed':
             continue
         try:
             if not entry['tab']:
@@ -403,7 +411,7 @@ def collect_sources(store, runtime, *, only_webview=False):
                 raise RuntimeError('当前页面主榜或子榜与来源表不对应')
             client.__dict__['_rank_last_elements'] = elements
             client.__dict__['_rank_page_source'] = xml
-            if entry['snapshot_state'] != 'completed':
+            if not store.items(entry['id']):
                 header, rows = read_tab(client, main, entry['tab'], initial_elements=elements)
                 store.save_rows(entry['id'], entry['directory'], header, rows)
             else:
@@ -413,13 +421,11 @@ def collect_sources(store, runtime, *, only_webview=False):
                 raise RuntimeError('当前榜单没有可定位的商品元素')
             saved_rows = [json.loads(i['row_json']) for i in store.items(entry['id'])]
             capture_ranking(store, client, store.list(entry['id']), saved_rows, elements)
-            if store.list(entry['id'])['export_state'] != 'completed':
-                store.export(entry['id'])
-            store.list_state(entry['id'], 'running')
-            run_products(store, client, entry, rows, only_webview=only_webview and entry['collect_state'] != WEBVIEW_SKIP)
             store.export(entry['id'])
-            terminal = all(i['product_state'] in {'completed', WEBVIEW_SKIP} and i['rank_state'] in {'completed', WEBVIEW_SKIP}
-                           for i in store.items(entry['id']))
+            store.list_state(entry['id'], 'running')
+            run_products(store, client, entry, rows, only_webview=only_webview)
+            store.export(entry['id'])
+            terminal = all(product_complete(i) for i in store.items(entry['id']))
             store.list_state(entry['id'], 'completed' if terminal else 'pending')
         except WebviewElementSkip:
             store.list_state(entry['id'], WEBVIEW_SKIP)

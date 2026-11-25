@@ -16,6 +16,11 @@ SPIDER_RETRY_DELAY=2
 SPIDER_PRODUCT_RETRY_DELAY=300
 # Required primary database; tables use the ods schema and t_pdd_ prefix.
 SPIDER_POSTGRES_URL=
+# Selling point extraction (DeepSeek vision by default).
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+VISION_MODEL=deepseek-flash
+TEXT_MODEL=deepseek-flash
 # Optional upstream proxy. Browser response capture itself requires no standalone mitm.
 SPIDER_PROXY=
 SPIDER_MITM_PORT=8080

@@ -1,4 +1,4 @@
-"""Collect web product information with Chrome."""
+"""Hidden web collection entry point."""
 from automation.pdd.spider.web import main as collect
 
 

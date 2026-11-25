@@ -29,29 +29,52 @@ def test_ascii_panels_align_chinese_and_truncate_long_text(capsys):
     assert '中文榜单' in '\n'.join(lines)
 
 
-def test_collection_summary_reports_cooldown_and_filters(database, capsys):
+def test_check_outputs_only_environment_and_ranking_panels(monkeypatch, capsys):
+    from contextlib import nullcontext
+    db = Mock()
+    db.execute.return_value.fetchall.return_value = []
+    monkeypatch.setattr(health, 'connect', lambda **kwargs: nullcontext(db))
+    monkeypatch.setattr(health, 'columns', lambda *args: {'product_count'})
+    monkeypatch.setattr(health, 'environment_checks', lambda: [('iOS device', 'OK', 'Ready')])
+    assert health.run(capture_date='2026-11-16') == 0
+    output = capsys.readouterr().out
+    assert output.count('PDD SPIDER CHECK / ENVIRONMENT') == 1
+    assert output.count('COLLECTION STATUS') == 1
+    assert 'PRODUCT STATUS' not in output and 'RESULT:' not in output
+
+
+def test_collection_summary_reports_six_steps_and_missing_identity(database, capsys):
+    from automation.pdd.spider.mobile_database import PRODUCT_COLUMNS
     path, rid = database
-    now = datetime.now(BEIJING)
     with health.connect(path) as db:
-        db.execute("UPDATE t_pdd_ranking_products SET mobile_state='completed'")
-        db.execute('UPDATE t_pdd_rankings SET web_collected_at=%s', ((now - timedelta(minutes=5)).isoformat(),))
-    with health.connect(path, readonly=True) as db:
+        db.execute("UPDATE t_pdd_ranking_products SET " + ','.join(f"{c}='completed'" for c in PRODUCT_COLUMNS))
         health.collection_status(db)
         output = capsys.readouterr().out
         assert '1/1' in output and '0/1' in output
-        assert (now + timedelta(minutes=25)).strftime('%m-%d %H:%M:%S') in output
+        assert 'Matched' in output and 'Identity' not in output and 'PRODUCT STATUS' not in output
         health.collection_status(db, ranking_id=rid + 1)
         assert '猫粮' not in capsys.readouterr().out
 
 
-def test_no_web_attempt_shows_ready_only_for_mobile_completed(database, capsys):
-    path, _ = database
-    with health.connect(path) as db:
-        health.collection_status(db)
-        assert 'READY' not in capsys.readouterr().out
-        db.execute("UPDATE t_pdd_ranking_products SET mobile_state='completed'")
-        health.collection_status(db)
-        assert 'READY' in capsys.readouterr().out
+def test_matched_and_points_follow_data_instead_of_analysis_flags(database, tmp_path, monkeypatch):
+    path, rid = database
+    store = Store(path)
+    try:
+        first = store.items(rid)[0]
+        second = store.save_item(rid, store.list(rid)['directory'], {'排行': 2, '标题': '第二个'})
+        store.db.execute("UPDATE t_pdd_ranking_products SET platform_product_id='123',platform_product_link='link',listing_date='2026-01-01' WHERE id=%s", (first['id'],))
+        store.db.execute("INSERT INTO t_pdd_product_analysis(ranking_product_id,match_state,point_state) VALUES(%s,'failed','completed'),(%s,'completed','failed')", (first['id'], second['id']))
+        store.db.execute("""INSERT INTO t_pdd_selling_point(ranking_product_id,platform_product_id,main_point,secondary_point,raw_json)
+            VALUES(%s,'','卖点','','{}')""", (second['id'],))
+        panel = Mock()
+        monkeypatch.setattr(health, 'table', panel)
+        health.collection_status(store.db, ranking_id=rid)
+        panel.assert_called_once()
+        row = panel.call_args.args[2][0]
+        assert row[4:6] == ('1/2', '1/2')
+        assert row[-1] == 0  # Failed audit flags do not override existing business data.
+    finally:
+        store.close()
 
 
 def test_unavailable_database_does_not_get_initialized(tmp_path, monkeypatch, capsys):
@@ -88,7 +111,7 @@ def test_checks_continue_after_failure_and_do_not_print_credentials(monkeypatch)
                  'websocket_status', 'sogou_plugin', 'postgres_connection'):
         monkeypatch.setattr(health, name, lambda: ('OK', 'Ready'))
     rows = health.environment_checks()
-    assert len(rows) == 8 and rows[0][1] == 'FAIL' and rows[-1][1] == 'OK'
+    assert len(rows) == 5 and rows[0][1] == 'FAIL' and rows[-1][1] == 'OK'
     assert 'secret' not in str(rows) and 'example.com' not in str(rows)
 
 
@@ -121,7 +144,7 @@ def test_postgres_only_executes_read_only_connection_test(monkeypatch):
     connection.execute.return_value.fetchone.return_value = {'value': 1}
     connect = Mock(return_value=connection)
     monkeypatch.setattr(health, 'connect', connect)
-    monkeypatch.setattr(health, 'columns', lambda *args: {'id', 'mobile_state', 'sogou_state'})
+    monkeypatch.setattr(health, 'columns', lambda *args: {'id', 'state', *health.PRODUCT_COLUMNS})
     assert health.postgres_connection()[0] == 'OK'
     connect.assert_called_once_with(readonly=True)
     connection.execute.assert_called_once_with('SELECT 1 AS value')

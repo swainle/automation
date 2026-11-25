@@ -39,6 +39,8 @@ def snapshot(pg_database, tmp_path):
     store.save_rows(entry['id'], entry['directory'], [], [{'排行': 1, '标题': '新产品'}])
     item = store.items(entry['id'])[0]
     store.save_product_image(item['id'], dict(image_type='main', position=1, local_path='主图/001.jpg'))
+    store.db.execute("INSERT INTO t_pdd_product_analysis(ranking_product_id,match_evidence) VALUES(%s,%s)",
+                     (item['id'], '{"images":[]}'))
     rows = {table.removeprefix('t_pdd_'): store.db.execute(sql.SQL('SELECT * FROM {} ORDER BY id').format(
         sql.Identifier('ods', table))).fetchall() for table in TABLES}
     store.db.execute(sql.SQL('TRUNCATE {} RESTART IDENTITY').format(
@@ -54,7 +56,8 @@ def source_files(tmp_path, rows, legacy=None):
             names = list(values[0]) if values else ['id']
             db.execute(f'CREATE TABLE {table} (' + ','.join('"' + name + '"' for name in names) + ')')
             for row in values:
-                db.execute(f'INSERT INTO {table} VALUES (' + ','.join('?' for _ in names) + ')', list(row.values()))
+                db.execute(f'INSERT INTO {table} VALUES (' + ','.join('?' for _ in names) + ')',
+                           [json.dumps(v) if isinstance(v, (dict, list)) else v for v in row.values()])
     backup.write_text(json.dumps(legacy or {}, ensure_ascii=False), encoding='utf-8')
     return path, backup
 
@@ -122,17 +125,19 @@ def test_selling_point_is_product_owned_and_updates_timestamp(pg_database, tmp_p
             url='https://example.com/rank', tab_index=0)], tmp_path / 'data')[0]
         store.save_rows(entry['id'], entry['directory'], [], [{'排行': 1, '标题': '产品'}])
         product = store.items(entry['id'])[0]
-        row = store.db.execute("""INSERT INTO t_pdd_selling_point(ranking_product_id,point_type,content)
-            VALUES(%s,'main','卖点') RETURNING *""", (product['id'],)).fetchone()
-        updated = store.db.execute("UPDATE t_pdd_selling_point SET content='新卖点' WHERE id=%s RETURNING *",
+        row = store.db.execute("""INSERT INTO t_pdd_selling_point
+            (ranking_product_id,platform_product_id,main_point,secondary_point,raw_json)
+            VALUES(%s,'123','卖点','','{}') RETURNING *""", (product['id'],)).fetchone()
+        updated = store.db.execute("UPDATE t_pdd_selling_point SET main_point='新卖点' WHERE id=%s RETURNING *",
                                    (row['id'],)).fetchone()
         assert updated['created_at'] == row['created_at']
         assert updated['updated_at'] > row['updated_at']
         assert updated['created_at'].utcoffset() is not None
-        with pytest.raises(psycopg.errors.CheckViolation):
-            store.db.execute("UPDATE t_pdd_selling_point SET point_type='unknown' WHERE id=%s", (row['id'],))
-        with pytest.raises(psycopg.errors.CheckViolation):
-            store.db.execute("UPDATE t_pdd_selling_point SET content=' ' WHERE id=%s", (row['id'],))
+        assert updated['main_point'] == '新卖点'
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            store.db.execute("""INSERT INTO t_pdd_selling_point
+                (ranking_product_id,platform_product_id,main_point,secondary_point,raw_json)
+                VALUES(%s,'123','重复','','{}')""", (product['id'],))
     finally:
         store.close()
 

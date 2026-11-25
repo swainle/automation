@@ -3,11 +3,12 @@ from pathlib import Path
 import os
 
 from dotenv import load_dotenv
-from automation.config import load_environment
+from automation.config import ROOT, load_environment
 
 load_environment()
 
-BUSINESS_ROOT = Path(os.getenv("PDD_SPIDER_ROOT", str(Path.cwd().resolve().parent / "automation.pdd.spider"))).expanduser().resolve()
+_business_root = Path(os.getenv("PDD_SPIDER_ROOT", "automation.pdd.spider")).expanduser()
+BUSINESS_ROOT = (_business_root if _business_root.is_absolute() else ROOT / _business_root).resolve()
 load_dotenv(BUSINESS_ROOT / ".env")
 
 

@@ -13,7 +13,8 @@ from automation.pdd.spider.utils import sanitize
 
 SQL_NOW = "(to_char(clock_timestamp() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD\"T\"HH24:MI:SS') || '+08:00')"
 TABLES = ('t_pdd_rankings', 't_pdd_ranking_products', 't_pdd_product_skus',
-          't_pdd_product_main_images', 't_pdd_products_detail_image', 't_pdd_product_comments', 't_pdd_selling_point')
+          't_pdd_product_main_images', 't_pdd_products_detail_image', 't_pdd_product_comments', 't_pdd_selling_point',
+          't_pdd_product_analysis')
 
 
 def connect(dsn=None, *, readonly=False):
@@ -36,11 +37,41 @@ def columns(db, table):
 
 WEBVIEW_SKIP = 'webview_element_skip'
 PRODUCT_STAGES = {
+    'ranking_product_screenshot': 'ranking_product_screenshot_state',
     'product_screenshot': 'product_screenshot_state', 'main_images': 'main_images_state',
     'sku': 'sku_state', 'detail_images': 'detail_images_state',
-    'negative_comments': 'comments_state', 'product': 'product_state',
+    'negative_comments': 'comments_state',
 }
-LIST_STAGES = {'collect': 'snapshot_state', 'ranking_long_screenshot': 'screenshot_state', 'export': 'export_state'}
+PRODUCT_COLUMNS = tuple(PRODUCT_STAGES.values())
+PRODUCT_DONE_SQL = ' AND '.join(f"p.{column}='completed'" for column in PRODUCT_COLUMNS)
+PRODUCT_SKIP_SQL = '(' + ' OR '.join(f"p.{column}='skipped'" for column in PRODUCT_COLUMNS) + ')'
+IDENTITY_DONE_SQL = " AND ".join(f"btrim(COALESCE(p.{column},''))<>''" for column in ('platform_product_id', 'platform_product_link', 'listing_date'))
+
+
+def product_complete(item):
+    return all(item.get(column) in {'completed', 'skipped'} for column in PRODUCT_COLUMNS)
+
+
+def product_skipped(item):
+    return any(item.get(column) == 'skipped' for column in PRODUCT_COLUMNS)
+
+
+def identity_complete(item):
+    return all(str(item.get(column) or '').strip() for column in ('platform_product_id', 'platform_product_link', 'listing_date'))
+
+
+def product_status(item):
+    if product_skipped(item):
+        return 'skipped'
+    states = [item.get(column, 'pending') for column in PRODUCT_COLUMNS]
+    if all(state == 'completed' for state in states):
+        return 'completed'
+    if 'failed' in states:
+        return 'failed'
+    if 'running' in states:
+        return 'running'
+    return 'pending'
+
 
 
 def week_start(day):
@@ -60,6 +91,9 @@ class Store:
         try:
             with self.db.transaction():
                 self.db.execute(Path(__file__).with_name('mobile_schema.sql').read_text(encoding='utf-8'), prepare=False)
+                if ({'collect_state', 'snapshot_state', 'web_collected_at'} & columns(self.db, 't_pdd_rankings')
+                        or not set(PRODUCT_COLUMNS) <= columns(self.db, 't_pdd_ranking_products')):
+                    raise ValueError('数据库需迁移状态结构：先运行 python -m automation.pdd.spider.migrate_states 预览，停止采集后加 --apply 执行')
         except BaseException:
             self.db.close()
             raise
@@ -87,43 +121,50 @@ class Store:
 
     def list(self, list_id):
         row = dict(self.db.execute('SELECT * FROM t_pdd_rankings WHERE id=%s', (list_id,)).fetchone())
-        row.update(tab=row['tab_name'], state=row['collect_state'])
+        row.update(tab=row['tab_name'])
         return row
 
     def list_state(self, list_id, state, reason=''):
+        state = {'failed': 'retry_pending', WEBVIEW_SKIP: 'unavailable'}.get(state, state)
         with self.db.transaction():
-            self.db.execute(f'''UPDATE t_pdd_rankings SET collect_state=%s,updated_at={SQL_NOW},
-                completed_at=CASE WHEN %s='completed' THEN {SQL_NOW} ELSE NULL END WHERE id=%s''', (state, state, list_id))
+            self.db.execute(f'UPDATE t_pdd_rankings SET state=%s,updated_at={SQL_NOW} WHERE id=%s', (state, list_id))
 
     def stage(self, list_id, stage, item_id=None):
-        if item_id is None:
-            row, column = self.list(list_id), LIST_STAGES[stage]
-        else:
+        if item_id is not None:
             row = self.db.execute('SELECT * FROM t_pdd_ranking_products WHERE id=%s', (item_id,)).fetchone()
-            column = PRODUCT_STAGES[stage]
-        return {'state': row[column]}
+            return {'state': product_status(row) if stage == 'product' else row[PRODUCT_STAGES[stage]]}
+        entry = self.list(list_id)
+        if stage == 'collect':
+            done = entry['product_count'] > 0 and len(self.items(list_id)) >= entry['product_count']
+        else:
+            name = {'ranking_long_screenshot': '榜单长图.jpg', 'export': '榜单数据.xlsx'}[stage]
+            done = (Path(entry['directory']) / name).is_file()
+        return {'state': 'completed' if done else 'pending'}
 
     def stage_state(self, list_id, stage, state, *, item_id=None, artifacts=None, reason=''):
+        if item_id is None:
+            if state == 'failed':
+                self.list_state(list_id, 'retry_pending', reason)
+            return
+        if stage == 'product':
+            self.product_state(item_id, state, reason=reason)
+            return
+        if stage == 'product_info':
+            return  # Product identity is represented by its actual fields.
+        column = PRODUCT_STAGES[stage]
+        if state not in {'pending', 'running', 'completed', 'failed', 'skipped'}:
+            raise ValueError(f'无效商品步骤状态：{state}')
         with self.db.transaction():
-            if item_id is None:
-                column = LIST_STAGES[stage]
-                self.db.execute(f'UPDATE t_pdd_rankings SET {column}=%s,last_stage=%s,updated_at={SQL_NOW} WHERE id=%s', (state, stage, list_id))
-            else:
-                column = PRODUCT_STAGES[stage]
-                # Product wrapper state must not hide the actual unfinished step.
-                active = stage != 'product' or not self.db.execute('SELECT last_stage FROM t_pdd_ranking_products WHERE id=%s', (item_id,)).fetchone()['last_stage']
-                self.db.execute(f'UPDATE t_pdd_ranking_products SET {column}=%s,last_error=%s,updated_at={SQL_NOW}' +
-                                (',last_stage=%s' if active else '') + ' WHERE id=%s',
-                                (state, reason, *([stage] if active else []), item_id))
-                rank = self.db.execute('SELECT rank,last_stage FROM t_pdd_ranking_products WHERE id=%s', (item_id,)).fetchone()
-                self.db.execute(f'UPDATE t_pdd_rankings SET last=%s,last_stage=%s,updated_at={SQL_NOW} WHERE id=%s', (rank['rank'], rank['last_stage'], list_id))
+            self.db.execute(f'UPDATE t_pdd_ranking_products SET {column}=%s,updated_at={SQL_NOW} WHERE id=%s',
+                            (state, item_id))
+            self.db.execute(f'UPDATE t_pdd_rankings SET updated_at={SQL_NOW} WHERE id=%s', (list_id,))
 
     def save_rows(self, list_id, directory, header, rows, device='ios', **kwargs):
         ranks = [int(row['排行']) for row in rows]
         if not ranks or min(ranks) < 1 or len(ranks) != len(set(ranks)):
             raise ValueError('榜单商品排行为空或重复')
         entry = self.list(list_id)
-        if entry['snapshot_state'] == 'completed':
+        if self.items(list_id):
             return
         day = date.fromisoformat(entry['capture_date'])
         year, week, _ = day.isocalendar()
@@ -136,8 +177,8 @@ class Store:
                 values = [list_id, rank, row['标题'], str(Path(directory) / f'榜{rank:02d}'),
                           day.strftime('%Y-%m'), (day.day - 1) // 7 + 1, year, week, *(metrics[key] for key in FIELDS)]
                 self.db.execute(f'INSERT INTO t_pdd_ranking_products({",".join(columns)}) VALUES({",".join("%s" for _ in columns)})', values)
-            self.db.execute("UPDATE t_pdd_rankings SET snapshot_state='completed',directory=%s,description=%s WHERE id=%s",
-                            (str(directory), rows[0].get('榜单统计说明', ''), list_id))
+            self.db.execute(f"UPDATE t_pdd_rankings SET product_count=%s,directory=%s,description=%s,updated_at={SQL_NOW} WHERE id=%s",
+                            (len(rows), str(directory), rows[0].get('榜单统计说明', ''), list_id))
 
     def items(self, list_id):
         return [self.item(r['id']) for r in self.db.execute('SELECT id FROM t_pdd_ranking_products WHERE ranking_id=%s ORDER BY rank', (list_id,))]
@@ -149,8 +190,8 @@ class Store:
         if not ranks:
             raise ValueError('榜单商品为空')
         with self.db.transaction():
-            self.db.execute("""UPDATE t_pdd_rankings SET product_count=%s,snapshot_state='completed',
-                description=%s WHERE id=%s""", (len(rows), rows[0].get('榜单统计说明', ''), list_id))
+            self.db.execute(f"""UPDATE t_pdd_rankings SET product_count=%s,
+                description=%s,updated_at={SQL_NOW} WHERE id=%s""", (len(rows), rows[0].get('榜单统计说明', ''), list_id))
 
     def save_item(self, list_id, directory, row):
         entry = self.list(list_id)
@@ -173,13 +214,12 @@ class Store:
 
     def requeue_undated_comments(self, list_id):
         with self.db.transaction():
-            count = self.db.execute('''UPDATE t_pdd_ranking_products SET comments_state='pending',
-                product_state='pending',rank_state='pending' WHERE ranking_id=%s
-                AND product_state='completed' AND comments_state='completed'
+            count = self.db.execute('''UPDATE t_pdd_ranking_products SET comments_state='pending' WHERE ranking_id=%s
+                AND comments_state='completed'
                 AND EXISTS(SELECT 1 FROM t_pdd_product_comments c WHERE c.ranking_product_id=t_pdd_ranking_products.id
                            AND (c.commented_at IS NULL OR c.commented_at=''))''', (list_id,)).rowcount
             if count:
-                self.db.execute("UPDATE t_pdd_rankings SET collect_state='pending',completed_at=NULL WHERE id=%s", (list_id,))
+                self.db.execute("UPDATE t_pdd_rankings SET state='pending' WHERE id=%s", (list_id,))
         return count
 
     def item(self, item_id):
@@ -204,15 +244,24 @@ class Store:
         row.update(list_id=row['ranking_id'], row_json=encode(data), product_json=encode(product))
         return row
 
-    def item_state(self, item_id, state):
-        with self.db.transaction():
-            self.db.execute(f'UPDATE t_pdd_ranking_products SET rank_state=%s,updated_at={SQL_NOW} WHERE id=%s', (state, item_id))
-
     def product_state(self, item_id, state, *, details=None, reason=''):
-        item = self.item(item_id)
         if details is not None:
             self.save_progress(item_id, details)
-        self.stage_state(item['list_id'], 'product', state, item_id=item_id, reason=reason)
+        if state in {'failed', WEBVIEW_SKIP}:
+            item = self.item(item_id)
+            # A navigation/read failure must remain retryable without resetting completed steps.
+            for column in PRODUCT_COLUMNS:
+                if item[column] != 'completed':
+                    self.db.execute(f"UPDATE t_pdd_ranking_products SET {column}='failed',updated_at={SQL_NOW} WHERE id=%s", (item_id,))
+                    break
+
+    def skip_product(self, item_id, reason):
+        with self.db.transaction():
+            fields = ','.join(f"{c}=CASE WHEN {c}='completed' THEN {c} ELSE 'skipped' END" for c in PRODUCT_COLUMNS)
+            self.db.execute(f'UPDATE t_pdd_ranking_products SET {fields},updated_at={SQL_NOW} WHERE id=%s', (item_id,))
+            self.db.execute(f"""INSERT INTO t_pdd_product_analysis(ranking_product_id,match_result,last_error)
+                VALUES(%s,'skipped',%s) ON CONFLICT(ranking_product_id) DO UPDATE SET
+                match_result='skipped',last_error=excluded.last_error,updated_at={SQL_NOW}""", (item_id, reason))
 
     def refresh_product_info(self, item_id, info):
         from automation.pdd.spider.metrics import from_text
@@ -220,7 +269,7 @@ class Store:
         fields = {'title': info['goods_name'], **metrics}
         with self.db.transaction():
             self.db.execute(f'UPDATE t_pdd_ranking_products SET ' + ','.join(f'{key}=%s' for key in fields) +
-                            f',collected_at={SQL_NOW},updated_at={SQL_NOW} WHERE id=%s', [*fields.values(), item_id])
+                            f',updated_at={SQL_NOW} WHERE id=%s', [*fields.values(), item_id])
 
     def save_product_image(self, item_id, record):
         table = {'main': 't_pdd_product_main_images', 'detail': 't_pdd_products_detail_image'}.get(record['image_type'])

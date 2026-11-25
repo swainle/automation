@@ -283,7 +283,7 @@ class Runtime:
         if self.client is None:
             if ios.wda_ready():
                 import wda
-                wda.HTTP_TIMEOUT = 30.0
+                wda.HTTP_TIMEOUT = 180.0
                 self.client = wda.Client(ios.WDA_URL)
             else:
                 self.ensure_tunnel()
@@ -291,7 +291,7 @@ class Runtime:
                 self.ensure_driver()
                 self.ensure_forward()
                 import wda
-                wda.HTTP_TIMEOUT = 30.0
+                wda.HTTP_TIMEOUT = 180.0
                 self.client = wda.Client(ios.WDA_URL)
         return self.client
 

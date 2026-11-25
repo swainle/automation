@@ -1,11 +1,8 @@
 """Read-only environment checks and terminal status panels."""
-from collections import Counter
-from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
 import re
-from types import SimpleNamespace
 import unicodedata
 import urllib.request
 
@@ -14,8 +11,7 @@ import psycopg
 
 from automation.pdd.spider import config, ios
 from automation.pdd.spider.runtime import Runtime, port_ready
-from automation.pdd.spider.mobile_database import connect, columns, TABLES
-from automation.pdd.spider.time_format import BEIJING
+from automation.pdd.spider.mobile_database import connect, columns, TABLES, PRODUCT_COLUMNS, PRODUCT_DONE_SQL, PRODUCT_SKIP_SQL, IDENTITY_DONE_SQL
 
 
 def table(title, headers, rows, widths):
@@ -113,7 +109,7 @@ def postgres_connection():
             return 'FAIL', 'Unexpected connection test result'
         if any(not columns(db, table) for table in TABLES):
             return 'FAIL', 'ods.t_pdd_* tables missing'
-        if not {'mobile_state', 'sogou_state'} <= columns(db, 't_pdd_ranking_products'):
+        if not set(PRODUCT_COLUMNS) <= columns(db, 't_pdd_ranking_products') or 'state' not in columns(db, 't_pdd_rankings'):
             return 'FAIL', 'Collection state columns missing'
     return 'OK', 'Connected; ods.t_pdd_* tables ready'
 
@@ -121,8 +117,7 @@ def postgres_connection():
 def environment_checks():
     rows = []
     for name, probe in [('Business paths', business_paths), ('Source Excel', source_excel),
-                        ('iOS device', ios_device), ('WDA', wda_status), ('Sogou', sogou_browser),
-                        ('WebSocket', websocket_status), ('Sogou plugin', sogou_plugin), ('PostgreSQL', postgres_connection)]:
+                        ('iOS device', ios_device), ('WDA', wda_status), ('PostgreSQL', postgres_connection)]:
         try:
             state, detail = probe()
         except Exception as error:
@@ -132,38 +127,35 @@ def environment_checks():
     return rows
 
 
-def collection_status(db, ranking_id=None, product_id=None):
+def collection_status(db, ranking_id=None, product_id=None, capture_date=None):
     total = 'GREATEST(COUNT(p.id),r.product_count)' if product_id is None and 'product_count' in columns(db, 't_pdd_rankings') else 'COUNT(p.id)'
-    rows = db.execute(f'''SELECT r.id,r.main_name,r.tab_name,r.web_collected_at,{total} AS total,
-        COUNT(p.id) FILTER (WHERE p.mobile_state='completed') AS mobile_done,
-        COUNT(p.id) FILTER (WHERE p.sogou_state='completed') AS web_done
+    rows = db.execute(f"""SELECT r.id,r.main_name,r.tab_name,r.state,{total} AS total,
+        COUNT(p.id) FILTER (WHERE {PRODUCT_DONE_SQL}) AS done,
+        COUNT(p.id) FILTER (WHERE {PRODUCT_SKIP_SQL}) AS skipped,
+        COUNT(p.id) FILTER (WHERE {IDENTITY_DONE_SQL}) AS matched_done,
+        COUNT(p.id) FILTER (WHERE EXISTS(SELECT 1 FROM t_pdd_selling_point sp WHERE sp.ranking_product_id=p.id)) AS point_done,
+        COUNT(p.id) FILTER (WHERE NOT {PRODUCT_SKIP_SQL} AND ({' OR '.join(f"p.{c}='failed'" for c in PRODUCT_COLUMNS)}
+            OR (a.match_state='failed' AND NOT ({IDENTITY_DONE_SQL}))
+            OR (a.point_state='failed' AND NOT EXISTS(SELECT 1 FROM t_pdd_selling_point sp WHERE sp.ranking_product_id=p.id)))) AS failed
         FROM t_pdd_rankings r LEFT JOIN t_pdd_ranking_products p ON p.ranking_id=r.id
+        LEFT JOIN t_pdd_product_analysis a ON a.ranking_product_id=p.id
         WHERE (%s::bigint IS NULL OR r.id=%s) AND (%s::bigint IS NULL OR p.id=%s)
-        GROUP BY r.id ORDER BY r.id''', (ranking_id, ranking_id, product_id, product_id)).fetchall()
-    now = datetime.now(BEIJING)
-    output = []
-    for row in rows:
-        rid, main, tab, attempted, total, mobile_done, web_done = row.values()
-        next_web = '-'
-        if mobile_done > web_done:
-            due = datetime.fromisoformat(attempted) + timedelta(minutes=30) if attempted else now
-            next_web = 'READY' if due <= now else due.astimezone(BEIJING).strftime('%m-%d %H:%M:%S')
-        output.append((rid, f'{main}/{tab}', f'{mobile_done}/{total}', f'{web_done}/{total}', next_web))
-    table('COLLECTION STATUS', ('Rank ID', 'Name', 'Mobile', 'Web', 'Next web'), output, (7, 24, 9, 9, 14))
-    if ranking_id is not None or product_id is not None:
-        from automation.pdd.spider.unified import check
-        check(SimpleNamespace(db=db), ranking_id, product_id)
+        AND (%s::text IS NULL OR r.capture_date=%s)
+        GROUP BY r.id ORDER BY r.id""", (ranking_id, ranking_id, product_id, product_id, capture_date, capture_date)).fetchall()
+    output = [(r['id'], f"{r['main_name']}/{r['tab_name']}", r['state'], f"{r['done']}/{r['total']}",
+               f"{r['matched_done']}/{r['total']}",
+               f"{r['point_done']}/{r['total']}", r['skipped'], r['failed']) for r in rows]
+    table('COLLECTION STATUS', ('Rank ID', 'Name', 'State', 'Collected', 'Matched', 'Points', 'Skipped', 'Failed'),
+          output, (7, 24, 13, 9, 9, 9, 7, 6))
 
 
-def run(ranking_id=None, product_id=None):
+def run(ranking_id=None, product_id=None, capture_date=None):
     rows = environment_checks()
     table('PDD SPIDER CHECK / ENVIRONMENT', ('Item', 'State', 'Detail'), rows, (16, 5, 46))
-    counts = Counter(row[1] for row in rows)
-    print(f"RESULT: {counts['OK']} OK / {counts['WARN']} WARN / {counts['FAIL']} FAIL\n")
-    failed = bool(counts['FAIL'])
+    failed = any(state == 'FAIL' for _, state, _ in rows)
     try:
         with connect(readonly=True) as db:
-            collection_status(db, ranking_id, product_id)
+            collection_status(db, ranking_id, product_id, capture_date)
     except (psycopg.Error, ValueError) as error:
         table('COLLECTION STATUS', ('State', 'Detail'), [('FAIL', f'Cannot read status ({type(error).__name__})')], (5, 65))
         failed = True

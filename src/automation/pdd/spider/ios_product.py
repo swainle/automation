@@ -158,7 +158,35 @@ class IosProduct:
         if not xml:
             raise RuntimeError('iOS 商品页面元素树为空')
         self.xml, self.root = xml, ET.fromstring(xml)
+        self.dismiss_parameters()
         return self.root
+
+    def dismiss_parameters(self):
+        app = next(self.root.iter('XCUIElementTypeApplication'), None)
+        if app is None:
+            return
+        width = float(app.get('width'))
+        title = next((n for n in self.root.iter('XCUIElementTypeStaticText')
+                      if visible(n) and label(n) == '商品参数'
+                      and abs((rect(n)[0] + rect(n)[2]) / 2 - width / 2) < width * .1), None)
+        if title is None:
+            return
+        if getattr(self, '_closing_parameters', False):
+            raise RuntimeError('商品参数弹窗关闭后仍未消失，停止后续采集')
+        buttons = [n for n in self.root.iter() if visible(n)
+                   and (n.tag == 'XCUIElementTypeButton'
+                        or (n.tag == 'XCUIElementTypeStaticText' and label(n) == '\ue8f2'))
+                   and n.get('enabled') != 'false' and rect(n)[0] > width * .8
+                   and abs((rect(n)[1] + rect(n)[3]) / 2 - (rect(title)[1] + rect(title)[3]) / 2) < 30]
+        if len(buttons) != 1:
+            raise RuntimeError('未找到商品参数弹窗右上角唯一关闭按钮，停止后续采集')
+        self._closing_parameters = True
+        try:
+            self.tap(buttons[0])
+            self.snapshot()
+        finally:
+            self._closing_parameters = False
+        print('[商品] 已关闭商品参数弹窗，继续采集', flush=True)
 
     def tap(self, node):
         if not visible(node):
@@ -804,9 +832,11 @@ class IosProduct:
 
     def details(self):
         self._open_details()
+        clicked = False
         for attempt in range(12):
             thumbnail = self._detail_thumbnail()
             if thumbnail is not None:
+                clicked = True
                 x1, y1, x2, y2 = rect(thumbnail)
                 self.client.click(round((x1 + x2) / 2), round(min(max(y1, 125) + 60, y2 - 1, self.height - 100)))
                 time.sleep(.5)
@@ -814,7 +844,12 @@ class IosProduct:
                 if not self._exit_detail_video():
                     break
             if attempt == 11:
-                raise RuntimeError('滚动后未找到可点击的详情图片，未使用页面分段截图代替')
+                # 点过缩略图却始终是视频 → 详情图可能被视频遮挡，保留失败以便重试。
+                if clicked:
+                    raise RuntimeError('滚动后未找到可点击的详情图片，未使用页面分段截图代替')
+                # 从未找到任何可点击缩略图 → 文字/规格类详情，无放大图可采，优雅完成。
+                print('[iOS 商品] 详情无可点击的放大图片（文字/规格详情），跳过详情图片采集')
+                return
             self.swipe(top=.3, bottom=.7)
         try:
             position, total = self.viewer_counter()
@@ -836,13 +871,22 @@ class IosProduct:
                 print('[iOS 商品] 详情无放大图片浏览器（文字/规格详情），跳过详情图片采集')
                 return
         seen = set()
+        skipped = False
         try:
             for _ in range(total):
                 if position in seen:
                     raise RuntimeError('详情大图页码重复，未确认采集完整')
                 print(f'[详情] 采集 {len(seen) + 1}/{total}，图片页码 {position}/{total}', flush=True)
+                try:
+                    viewer = self.viewer_image()
+                except RuntimeError as error:
+                    if '没有可见的图片区域' in str(error):
+                        print('[iOS 商品] 放大浏览器中无可采集的图片区域（视频/非常规详情），跳过详情图片采集')
+                        skipped = True
+                        break
+                    raise
                 path = self.directory / '详情' / f'{position:04d}.jpg'
-                self.image(self.viewer_image(), path)
+                self.image(viewer, path)
                 self.record_image('detail', path, position=position)
                 seen.add(position)
                 if len(seen) == total:
@@ -853,7 +897,7 @@ class IosProduct:
                     raise RuntimeError('详情大图右滑失败')
                 time.sleep(.5)
                 position = self.wait_viewer_page(position, expected, total)
-            if len(seen) != total:
+            if not skipped and len(seen) != total:
                 raise RuntimeError('详情大图尚未完整采集')
         finally:
             self.close_viewer()

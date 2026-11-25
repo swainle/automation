@@ -2,6 +2,7 @@
 .test-tmp/
 .pytest_cache/
 dist/
+build/
 .uv-cache/
 .uv-python/
 .uv-python-bin/
@@ -16,3 +17,5 @@ logs/
 
 tmp/
 outputs/
+/automation.pdd.spider/
+/automation.pdd.screenshot/

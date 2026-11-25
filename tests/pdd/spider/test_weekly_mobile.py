@@ -8,7 +8,7 @@ from PIL import Image
 
 from automation.pdd.spider import weekly_mobile as flow
 from automation.pdd.spider import mobile_page
-from automation.pdd.spider.mobile_database import Store, WEBVIEW_SKIP, week_start, columns as pg_columns
+from automation.pdd.spider.mobile_database import PRODUCT_COLUMNS, product_complete, product_status, Store, WEBVIEW_SKIP, week_start, columns as pg_columns
 
 
 pytestmark = pytest.mark.usefixtures('pg_database')
@@ -109,10 +109,10 @@ def test_old_comments_requeue_only_comment_stage_and_dated_comments_stay_done(tm
     store.list_state(entry['id'], 'completed')
     assert store.requeue_undated_comments(entry['id']) == 1
     first, second = store.items(entry['id'])
-    assert first['comments_state'] == first['product_state'] == 'pending'
+    assert first['comments_state'] == 'pending'
     assert all(first[key] == 'completed' for key in ('main_images_state', 'sku_state', 'detail_images_state'))
-    assert second['product_state'] == 'completed'
-    assert store.list(entry['id'])['collect_state'] == 'pending'
+    assert second['comments_state'] == 'completed'
+    assert store.list(entry['id'])['state'] == 'pending'
     assert store.requeue_undated_comments(entry['id']) == 0
     assert json.loads(second['product_json'])['negative_comments'][0]['time'] == '2026-11-04'
     store.close()
@@ -130,8 +130,7 @@ def test_product_step_resume_survives_reopen(tmp_path):
     with pytest.raises(RuntimeError, match='SKU 中断'):
         collector.collect(item, Path(item['directory']), {'标题': '当前标题'}, initial_xml=PRODUCT_XML)
     store.product_state(item['id'], 'failed')
-    assert store.list(entry['id'])['last'] == 1
-    assert store.list(entry['id'])['last_stage'] == 'sku'
+    assert store.item(item['id'])['sku_state'] == 'failed'
     collector.main_images.assert_not_called()
     collector.details.assert_not_called()
     store.close()
@@ -143,7 +142,7 @@ def test_product_step_resume_survives_reopen(tmp_path):
     collector.skus.assert_called_once()
     collector.details.assert_called_once()
     collector.comments.assert_called_once()
-    assert store.item(item['id'])['product_state'] == 'completed'
+    assert all(store.item(item['id'])[c] == 'completed' for c in PRODUCT_COLUMNS if c != 'ranking_product_screenshot_state')
     assert store.item(item['id'])['title'] == '更新标题'
     store.close()
 
@@ -219,30 +218,15 @@ def test_wrong_product_is_rejected_before_screenshot_or_collection(tmp_path, mon
         flow.run_products(store, client, entry, rows)
     client.screenshot.assert_not_called()
     collect.assert_not_called()
-    assert store.items(entry['id'])[0]['product_state'] == 'failed'
+    assert product_status(store.items(entry['id'])[0]) == 'failed'
     store.close()
 
 
-def test_webview_skips_whole_product_and_only_retries_flags(tmp_path, monkeypatch):
+def test_webview_failure_keeps_product_retryable(tmp_path, monkeypatch):
     store, entry, rows = prepared(tmp_path)
-    items = store.items(entry['id'])
     patch_product_navigation(monkeypatch, WEBVIEW_XML)
-    client = Mock()
-    flow.run_products(store, client, entry, rows)
-    assert all(i['product_state'] == WEBVIEW_SKIP for i in store.items(entry['id']))
-    flow.product_element.reset_mock()
-    flow.run_products(store, client, entry, rows)
-    flow.product_element.assert_not_called()
-    store.product_state(items[1]['id'], 'pending')
-    monkeypatch.setattr(flow.ios, '_current_page_source', Mock(return_value=PRODUCT_XML))
-    def complete(self, item, *args, **kwargs):
-        self.store.product_state(item['id'], 'completed')
-    monkeypatch.setattr(flow.WeeklyProduct, 'collect', complete)
-    client.screenshot.side_effect = lambda: Image.new('RGB', (100, 100))
-    flow.run_products(store, client, entry, rows, only_webview=True)
-    assert flow.product_element.call_count == 1
-    assert store.item(items[0]['id'])['product_state'] == 'completed'
-    assert store.item(items[1]['id'])['product_state'] == 'pending'
+    flow.run_products(store, Mock(), entry, rows)
+    assert all(not product_complete(i) and product_status(i) == 'failed' for i in store.items(entry['id']))
     store.close()
 
 
@@ -253,27 +237,24 @@ def test_product_waits_through_transient_webview_without_persisting_skip(tmp_pat
     monkeypatch.setattr(flow.ios, '_current_page_source', read)
     def complete(self, item, *args, **kwargs):
         assert kwargs['initial_xml'] == PRODUCT_XML
-        self.store.product_state(item['id'], 'completed')
+        for stage in ('main_images', 'sku', 'detail_images', 'negative_comments'):
+            self.store.stage_state(item['list_id'], stage, 'completed', item_id=item['id'])
     monkeypatch.setattr(flow.WeeklyProduct, 'collect', complete)
     client = Mock()
     client.screenshot.return_value = Image.new('RGB', (100, 100))
     flow.run_products(store, client, entry, rows)
     assert read.call_count == 2
-    assert store.items(entry['id'])[0]['product_state'] == 'completed'
+    assert store.items(entry['id'])[0]['product_screenshot_state'] == 'completed'
     store.close()
 
 
-def test_completed_or_webview_board_does_not_connect(tmp_path, monkeypatch):
+def test_completed_board_does_not_connect(tmp_path, monkeypatch):
     store, entry, _ = prepared(tmp_path)
     monkeypatch.setattr(flow, 'today', lambda: '2026-11-07')
     monkeypatch.setattr(flow, 'read_leaderboards', lambda _: SOURCES)
+    store.list_state(entry['id'], 'completed')
     runtime = Mock()
-    for state in ('completed', WEBVIEW_SKIP):
-        store.list_state(entry['id'], state)
-        assert flow.collect_sources(store, runtime) == 0
-    runtime.ensure_wda.assert_not_called()
-    store.list_state(entry['id'], 'pending')
-    assert flow.collect_sources(store, runtime, only_webview=True) == 0
+    assert flow.collect_sources(store, runtime) == 0
     runtime.ensure_wda.assert_not_called()
     store.close()
 
@@ -298,12 +279,12 @@ def test_board_webview_flag_survives_runs(tmp_path, monkeypatch):
     monkeypatch.setattr(flow.ios, '_current_page_source', Mock(return_value=WEBVIEW_XML))
     runtime = Mock()
     assert flow.collect_sources(store, runtime) == 0
-    assert store.list(1)['collect_state'] == WEBVIEW_SKIP
+    assert store.list(1)['state'] == 'unavailable'
     assert navigation.open_app_board.call_count == 1
     assert flow.collect_sources(store, runtime) == 0
-    assert navigation.open_app_board.call_count == 1
-    assert flow.collect_sources(store, runtime, only_webview=True) == 0
     assert navigation.open_app_board.call_count == 2
+    assert flow.collect_sources(store, runtime, only_webview=True) == 0
+    assert navigation.open_app_board.call_count == 3
     store.close()
 
 
@@ -351,6 +332,7 @@ def test_resume_does_not_recollect_ranking_or_images(tmp_path, monkeypatch):
         path = directory / '榜01/产品榜单截图.jpg'
         path.parent.mkdir(parents=True)
         Image.new('RGB', (50, 50)).save(path)
+        Image.new('RGB', (50, 50)).save(directory / '榜单长图.jpg')
     capture_mock = Mock(side_effect=capture)
     monkeypatch.setattr(flow.longshot, 'capture', capture_mock)
     process = Mock(side_effect=RuntimeError('商品中断'))
@@ -361,13 +343,13 @@ def test_resume_does_not_recollect_ranking_or_images(tmp_path, monkeypatch):
     def complete(store, client, entry, live_rows, **kwargs):
         assert live_rows[0]['标题'] == '当前标题'
         item = store.items(entry['id'])[0]
-        store.product_state(item['id'], 'completed')
-        store.item_state(item['id'], 'completed')
+        for stage in ('ranking_product_screenshot', 'product_screenshot', 'main_images', 'sku', 'detail_images', 'negative_comments'):
+            store.stage_state(entry['id'], stage, 'completed', item_id=item['id'])
     process.side_effect = complete
     assert flow.collect_sources(store, Mock()) == 0
     assert read.call_count == capture_mock.call_count == 1
     assert store.items(1)[0]['title'] == '快照标题'
-    assert store.list(1)['collect_state'] == 'completed'
+    assert store.list(1)['state'] == 'completed'
     store.close()
 
 
@@ -380,10 +362,11 @@ def test_longshot_invalidates_pre_scroll_coordinates(tmp_path, monkeypatch):
         path = directory / '榜01/产品榜单截图.jpg'
         path.parent.mkdir(parents=True)
         Image.new('RGB', (50, 50)).save(path)
+        Image.new('RGB', (50, 50)).save(directory / '榜单长图.jpg')
     monkeypatch.setattr(flow.longshot, 'capture', capture)
     flow.capture_ranking(store, client, entry, rows, [])
     assert '_rank_last_elements' not in client.__dict__
-    assert store.list(entry['id'])['screenshot_state'] == 'completed'
+    assert store.items(entry['id'])[0]['ranking_product_screenshot_state'] == 'completed'
     store.close()
 
 

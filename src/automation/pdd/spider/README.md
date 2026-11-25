@@ -1,5 +1,34 @@
 # 拼多多榜单与商品采集
 
+## Windows 可执行文件
+
+在项目根目录执行：
+
+```powershell
+uv sync
+uv run python scripts/build_spider.py
+```
+
+生成 `dist/automation.pdd.spider.exe`（保留控制台的单文件程序）和相邻的 `dist/automation.pdd.spider/` 业务目录。后者保存 `.env`、输入、数据、日志及外部工具。程序自带 Python 和依赖，目标电脑不需要 uv 或 Python。
+
+```powershell
+.\dist\automation.pdd.spider.exe --help
+.\dist\automation.pdd.spider.exe --check
+.\dist\automation.pdd.spider.exe --check --capture-date 2026-11-16
+.\dist\automation.pdd.spider.exe --ranking-id 320
+```
+
+`--check --capture-date YYYY-MM-DD` 按榜单的 `capture_date` 精确筛选对应商品并汇总；不传日期时统计全部榜单和商品。检查只输出环境/设备状态及榜单状态两张表，不输出商品明细。可与两个 ID 参数组合，条件取交集。该参数仅用于检查，不会启动指定日期的采集。
+
+EXE 的默认业务目录相对于它自身，不受启动工作目录影响；源码运行仍以启动工作目录为准。SQL 和固定图片资源打入 EXE，真实配置、历史数据、签名证书不打入包。构建只生成空白凭据配置，并在本地有 go-ios 时复制公开的 `ios.exe` 工具；首次在新设备安装 WDA 所需的证书、归档和签名工具需另外准备。
+
+使用前填写业务 `.env` 的数据库连接和 `DEEPSEEK_API_KEY`，准备来源 Excel 和外部设备工具。沿用现有数据库及本机历史数据时，可显式设置 `PDD_SPIDER_ROOT` 指向原业务目录，避免数据库中的绝对目录与新部署位置不一致：
+
+```powershell
+$env:PDD_SPIDER_ROOT = 'D:\repo\automation\automation.pdd.spider'
+.\dist\automation.pdd.spider.exe --check
+```
+
 在 automation 项目根目录运行：
 
 ```powershell
@@ -9,6 +38,37 @@ uv run python -m automation.pdd.spider
 ```
 
 当前统一入口使用 PostgreSQL 作为唯一数据源：数据库 `test`、命名空间 `ods`，所有表使用 `t_pdd_` 前缀。连接只配置在业务目录 `.env` 的 `SPIDER_POSTGRES_URL`，不在源码中保存凭据。SQLite 和原 PostgreSQL 库仅保留迁移备份，采集不会回退到 SQLite。旧独立 `ranking`/`product` 流程与当前每周结构不兼容，使用统一入口及 ID 筛选。
+
+## 图片卖点提取
+
+在业务目录 `automation.pdd.spider/.env` 中配置（环境变量优先）：
+
+```dotenv
+SPIDER_POSTGRES_URL=你的数据库连接地址
+DEEPSEEK_API_KEY=你的密钥
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+VISION_MODEL=deepseek-flash
+TEXT_MODEL=deepseek-flash
+```
+
+默认使用 DeepSeek 图片接口；也可修改地址、密钥和模型，使用兼容 Chat Completions 图片格式的服务。
+
+```powershell
+# 指定榜单：ods.t_pdd_rankings.id
+uv run python -m automation.pdd.spider.point --ranking-id 319
+# 指定榜单商品：ods.t_pdd_ranking_products.id
+uv run python -m automation.pdd.spider.point --ranking-product-id 558
+# 先列出待处理商品，不调用模型、不写数据库
+uv run python -m automation.pdd.spider.point --ranking-id 319 --list
+# 调用模型并保存 JSON，不写数据库
+uv run python -m automation.pdd.spider.point --ranking-id 319 --dry-run --no-copy
+```
+
+不传 ID 时处理全部待提取商品；同时传两个 ID 时取交集。默认跳过已有卖点；平台商品 ID 为空也能提取，有平台 ID 时可复用同款已有结果。`--force` 强制重新提取，`--no-copy` 禁用同款复用；另保留 `--only`、`--limit`、`--workers`、`--batch` 等原脚本选项，详见 `--help`。
+
+读取数据库 `directory` 指向的商品目录内的 `主图/`、`SKU/`、`详情/`，排除文件名含“长图”的图片。相对商品目录及 `--out-root` 都基于业务目录解析。提取、合并、校验及一次修正后，主副卖点分别以 `/` 拼接，证据 JSON 一起保存到 `ods.t_pdd_selling_point`；正常提取的 JSON 另存为 `data/points/<ranking-id>/<榜NN>.json`。校验不通过只保存 JSON，不写库；同款复用直接复制数据库记录。
+
+卖点表采用当前实际库的“一商品一记录”字段：`ranking_product_id`、`platform_product_id`、`main_point`、`secondary_point`、`raw_json`。仓库建表定义已同步；旧 `point_type/content` 表需单独迁移，命令不自动修改数据库结构。实际库没有唯一约束时，写入通过锁定商品行串行处理。
 
 操作日志在执行前立即输出动作，完成后在同一行追加结果与一位小数的耗时，再换行，例如：
 
@@ -21,7 +81,7 @@ uv run python -m automation.pdd.spider
 
 ## 业务目录
 
-默认使用项目相邻的 `automation.pdd.spider`，也可在启动前设置 `PDD_SPIDER_ROOT` 为绝对目录。
+默认使用启动工作目录下的 `automation.pdd.spider`（在项目目录执行 uv run 时即项目下的同名目录），也可在启动前设置 `PDD_SPIDER_ROOT` 为绝对目录。
 
 ```text
 automation.pdd.spider/
@@ -68,100 +128,35 @@ automation.pdd.spider/
 
 `SPIDER_PRODUCT_RETRY_DELAY` 默认 30 秒；业务 `.env` 中已配置的值会覆盖默认值。统一入口会先切换到任务要求的子榜，无法找到或确认目标子榜时标记 `unavailable` 并跳过，本次不等待重试。
 
-## 独立补采网页产品信息
+## 自动历史匹配与分析续跑
+
+主命令 `uv run python -m automation.pdd.spider`（含两个 ID 筛选参数）在每个商品图片和评论采集完成后，立即执行历史匹配和卖点提取，再处理下一个商品。已有图片完成的商品直接补分析，不打开手机页面；已完成分析不重复调用模型。API Key 仍配置在业务目录 `.env` 的 `DEEPSEEK_API_KEY`。
+
+历史匹配只比较更早周、已有平台 ID 和链接的直接采集记录，避免把推测结果逐周传播。按标题精确匹配，只统一全半角并移除空白、换行和零宽字符，不使用图片、相似度或模糊标题。相同标题对应多个平台 ID 时记为 `conflict`，不回填；同一平台 ID 有多条历史记录时优先选信息完整且日期较新的记录。只补空的 ID、链接、上架日期，不覆盖冲突值，并记录来源商品 ID 和标题证据。
+
+匹配是否完成以商品的平台 ID、链接、上架日期三个字段均非空（含去除空白）为准；卖点是否完成以卖点表存在该 `ranking_product_id` 的记录为准。分析表的 `match_state/point_state` 记录执行进度，不能覆盖实际数据判断；`match_result` 区分 `existing`（身份原本完整）、`matched`、`unmatched`、`conflict`、`insufficient`。未匹配时字段留空，仍提取卖点；真实调用失败保留失败断点，主命令返回非零，下次只补失败分析。单次运行每个商品最多尝试一次分析，避免同一失败反复计费。
+
+历史商品按规范化标题建立内存索引，同一周的数据在每次运行中只查询一次，匹配不读取图片或图片指纹缓存。三个身份字段齐全时跳过匹配；已有卖点记录时跳过提取，不因旧分析标志失败或图片变化而删除现有数据、重复调用模型。身份字段仍缺失的商品下次启动可重新匹配；没有匹配到结果时保持未完成，不伪造身份字段。
+
+`--check` 只显示设备/环境与榜单两张表。`Matched` 按三个身份字段齐全的商品数统计，`Points` 按卖点表存在记录的商品数统计，均除以商品总数；同一个商品即使存在多条卖点记录也只计一次。网页获取入口保持隐藏。相同标题也可能对应不同链接；已知历史候选存在多平台 ID 或与当前已有字段冲突时，继续留空。卖点提取仍按原规则使用图片，匹配方式调整不改变卖点功能。
+
+## 采集状态与结构迁移
+
+榜单只保存 `state`：`unavailable`（不可用）、`pending`（等待采集）、`running`（采集中）、`completed`（完成）、`retry_pending`（失败等待重采）。
+
+商品只保存六个步骤状态：`ranking_product_screenshot_state`（榜单长图裁剪）、`product_screenshot_state`、`main_images_state`、`sku_state`、`detail_images_state`、`comments_state`；取值为 `pending/running/completed/failed/skipped`。没有评论但已检查完毕也标记完成。手机采集进度由六项计算；每个商品六项完成后立即匹配历史图片，再提取卖点。匹配和卖点断点保存在独立的 `t_pdd_product_analysis`，不增加商品表状态字段。榜单完成需要手机六项及两个分析步骤都完成。身份信息缺失不影响卖点提取；未匹配或冲突仍属于身份信息未完成。
+
+两张表的技术时间戳只保留 `created_at/updated_at`；上架日期、采集日期和所属周等业务日期保留。`.sogou`、`.chrome`、`.edge` 网页获取入口已隐藏，不再采集网页信息；共享浏览器底层工具仍供其他模块使用，`--check` 不再检查浏览器。
+
+旧库先预览，停止运行中的采集任务后执行：
 
 ```powershell
-uv run python -m automation.pdd.spider.sogou
-uv run python -m automation.pdd.spider.chrome
-uv run python -m automation.pdd.spider.edge
-# 三个入口均支持以下筛选：
-uv run python -m automation.pdd.spider.chrome --ranking-id 12
-uv run python -m automation.pdd.spider.edge --ranking-product-id 34
+uv run python -m automation.pdd.spider.migrate_states
+uv run python -m automation.pdd.spider.migrate_states --apply
 ```
 
-默认读取本周已有榜单，给网页未完成的已有产品记录补采产品 ID、链接和上架日期，不要求手机完成，不创建榜单或执行手机采集。指定 ID 可处理其他周的数据。三个入口共享原有网页完成状态（数据库字段仍为 `sogou_state`），换浏览器不会重复采集已完成项。
+迁移会将两张表的完整原始记录备份到业务目录 `data/backups/states-before-*.json`，事务内转换状态和删列，核对记录 ID 与业务字段，失败回滚。不使用 CASCADE 删除依赖。新裁剪状态根据有效图片回填；中断的商品步骤变回待采，运行中的旧榜单变为等待重采。榜单完成还须满足商品数量、六项完成及榜单长图和导出文件存在。旧库不会在启动采集时自动删列。
 
-更新代码后先重启已运行的 `automation.com.extension_bridge` 公共服务，使 Edge 路由生效。
-
-先在对应浏览器的实际用户目录安装/重新加载本仓库 `extension` 插件，并配置相同的公共 WS 地址。Chrome、Edge 默认使用本机安装路径和各自标准用户目录；可通过 `SPIDER_CHROME_EXECUTABLE`、`SPIDER_CHROME_USER_DATA_DIR`、`SPIDER_EDGE_EXECUTABLE`、`SPIDER_EDGE_USER_DATA_DIR` 覆盖。搜狗继续使用原有路径配置。
-
-命令自动启动或复用公共 WS 和对应浏览器，在独立任务窗口跳转榜单。先等待导航完成，再等待商品卡片出现并滚动加载，按标题唯一匹配后写入三个字段。成功后关闭本次任务窗口，其他工作窗口和公共 WS 保留；失败每隔半小时重试，Ctrl+C 停止时保留任务窗口供检查。无可补采产品时不打开窗口。
-
-### 搜狗浏览器
-
-```powershell
-uv run python -m automation.pdd.spider.ranking
-```
-
-在搜狗的扩展管理中加载本仓库 `extension` 目录，已有插件需要重新加载至 0.13.0。在搜狗插件配置页把连接地址设为 `ws://127.0.0.1:8765/`，与商家截图共用公共 WS 服务。服务按浏览器分发，搜狗、Chrome 与 Edge 可同时连接。
-
-命令优先复用本机插件通信服务和已准备的搜狗，未就绪时才启动浏览器，保留其用户数据。浏览器不带 `--remote-debugging-port`，不使用 Playwright/CDP 连接。程序检查插件 WebSocket 连接对应的进程属于配置的搜狗可执行文件，避免使用其他浏览器中连接的插件。
-
-浏览器窗口、页面缩放、视口均由用户手动设置。插件仅附加 debugger 以监听请求、发送主图拖拽输入，不再设置窗口尺寸、标签页缩放、设备模拟尺寸或触摸模拟开关。
-
-公共服务端口在 automation 项目根目录 `.env` 设置 `AUTOMATION_WS_PORT=8765`，环境变量优先。旧的 `SPIDER_RANKING_WS_PORT` 不再使用。已有 WS 服务会优先复用；未启动时自动创建后台服务，采集命令退出后保留。旧版服务需先停止并重启。
-
-以下业务参数在业务目录 `.env` 设置：
-
-```dotenv
-SPIDER_RANKING_READY_TIMEOUT=120
-```
-
-旧的 SPIDER_RANKING_WIDTH、SPIDER_RANKING_HEIGHT、SPIDER_RANKING_SCALE 不再用于设置浏览器。
-
-### iOS 手机
-
-首次准备或单独运行 iOS 服务：
-
-```powershell
-uv run python -m automation.pdd.spider.ios
-# 多设备时指定 UDID
-uv run python -m automation.pdd.spider.ios --udid 设备UDID
-# 需要重新签名安装时
-uv run python -m automation.pdd.spider.ios --reinstall
-```
-
-命令检测 USB 设备，复用已安装的 WDA；缺少 WDA 或指定 `--reinstall` 时打包、签名并安装，再准备隧道、开发者镜像、WDA 驱动和 8100 端口转发。保持该终端运行，其他终端的 `ranking --ios` 可复用服务；Ctrl+C 只停止本命令启动的辅助进程。准备期间持有业务锁，就绪后释放锁供采集使用。手机需已安装 Apple USB 驱动、解锁并信任电脑，开启开发者模式并完成设备端证书信任。
-
-设备证书 ZIP 放在业务目录 `tools/ios/signing/`（默认 `D:\repo\automation.pdd.spider\tools\ios\signing\`）：
-
-```text
-tools/ios/signing/certificate_设备UDID.zip
-  ├── certificate.p12
-  └── profile.mobileprovision
-```
-
-ZIP 文件名必须包含设备 UDID，每台设备只能匹配一个 ZIP；内部可有子目录，但必须恰有一个 `.p12` 和一个 `.mobileprovision`。程序检查描述文件有效期、设备授权和明确的 Bundle ID。P12 密码运行时隐藏输入，也可通过环境变量 `SPIDER_P12_PASSWORD` 提供；临时解压的证书在签名后清理。证书放业务目录，不放源码仓库。
-
-Windows 使用预编译 WDA 进行打包签名，并非从源码编译。默认源目录为 `tools/ios/archive/WebDriverAgentRunner-Runner.app.v16.15.3`，签名工具为 `tools/vendor/zsign/zsign.exe`，go-ios 为 `tools/vendor/go-ios/ios.exe`。可通过 `--wda-version 7.0.0` 或业务 `.env` 的 `SPIDER_WDA_VERSION` 选择兼容设备 iOS 版本的预编译包。源码编译需在 macOS/Xcode 完成，再提供 `.app`。签名产物保存在 `tools/releases/wda/`。
-
-业务 `.env` 可选设置 `SPIDER_IOS_UDID`（多设备时固定目标），`WDA_BUNDLE_ID`（设备上安装多个 WDA 时指定）。已有设备只需补齐缺失配置项，不必覆盖原 `.env`。
-
-```powershell
-uv run python -m automation.pdd.spider.ranking --ios
-```
-
-只准备 iOS 隧道、镜像、WDA 驱动与转发，通过 Safari 来源链接打开 App 并核对榜单，不启动搜狗或插件服务。旧版本 iOS 跳过不适用的隧道，已有服务复用。
-
-按 Excel 每行采集指定子榜：
-
-```powershell
-uv run python -m automation.pdd.spider.ranking --ios
-# 只采手机当前打开的榜单
-uv run python -m automation.pdd.spider.ranking --ios --current
-```
-
-`ranking --ios` 按 `SPIDER_SOURCE_XLSX`（默认 `data/grab/pdd/拼多多榜单.xlsx`）顺序循环一轮。每条链接先结束拼多多应用，确认进程已停止后在 Safari 实际打开网址。自动处理“是否打开拼多多”确认框；没有弹窗时点击网页“打开拼多多APP”或右上角“在App打开”，再确认打开。核对 C 列目标主榜后，仅采集 D 列指定子榜的数据、长图、裁剪、商品截图及分享链接，再切换下一行。链接或榜单访问失败记入数据库并继续下一条；严重流程错误和 Ctrl+C 停止。`--refresh` 重新采集全部榜单数据、长图、裁剪、商品截图和分享链接，`--source-name` 仅用于 `--current` 模式。
-
-### 数据与续采
-
-两种模式共用 SQLite。按来源表、子榜、商品顺序执行采集、截图、裁剪和链接获取，原 Excel 的所有列和行先入库，再导出原格式 Excel。
-
-当前设备访问/读取失败的任务记录原因后跳过，不自动使用另一设备；可稍后执行另一个命令补采。已完成子榜不会重复采集；切换设备采集尚未完成的子榜时重新读取该子榜，避免混用两种设备的截图和元素快照。截图、裁剪、链接或导出失败留在所选设备重试，直到完成或 Ctrl+C。
-
-同日重启按数据库续采，次日运行建立新任务，不自动等待第二天。商品命令独立处理已有有效链接的记录，ID 缺失时在采集中补全，不受整轮榜单完成状态限制。两种模式只关闭插件登记的榜单任务页或自己启动的手机辅助进程，复用的浏览器与服务保留。
-
-移动模拟与设备预览缩放的底层能力参见 [Chrome 扩展 debugger API](https://developer.chrome.com/docs/extensions/reference/api/debugger) 和 [Emulation.setDeviceMetricsOverride](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setDeviceMetricsOverride)。
 
 ## 商品流程
 
@@ -415,9 +410,9 @@ uv run python -m automation.pdd.spider --check --ranking-id 12
 
 `--check` 只读检查业务路径、来源 Excel、iOS USB、WDA、搜狗进程、公共 WebSocket、搜狗插件和 PostgreSQL（只读 `SELECT 1`），显示 ASCII 环境面板和榜单手机/网页完成数、下次网页可尝试时间。指定榜单或产品 ID 时展开产品状态。`OK` 表示通过，`WARN` 表示未启动或未配置等提示，`FAIL` 表示检查失败；存在失败时退出码为 1，否则为 0。检查不会创建或迁移数据库、启动服务、打开网页、采集或同步，也不会显示连接密码。每项失败不会阻止后续检查。
 
-产品的 `mobile_state`、`sogou_state` 独立保存 pending/running/completed/failed 状态。手机完成后跳过；未完成按当前 rank 定位并更新该条标题和指标，同一商品保留已完成阶段，仅继续未完成阶段。确认该位置换了商品时才重置旧详情、产品 ID、链接、上架日期及网页状态。网页补采不重置手机阶段。完成产品的详情和榜单截图保持不变。WebView 无元素也不算完成，会继续重试。
+商品按六个步骤分别保存断点；已完成步骤复用，未完成步骤重试。确认排名位置换了商品时重置旧详情及身份字段。WebView 无元素不算完成。
 
-主命令只执行手机采集，手机未完成项继续重试；手机完成后退出，不打开浏览器，也不等待网页补采。链接打开后在默认 90 秒等待窗口内未确认目标榜单时，将该榜单的 `collect_state` 标记为 `unavailable`，本次跳过并继续下一个榜单，下次启动重新尝试；WDA 通信异常仍停止流程。此状态表示未到达目标榜单，也可能由临时跳转失败导致。随后手动运行 `.sogou`、`.chrome` 或 `.edge` 补采网页字段。仅当手机与网页两端全部完成时，才将整个榜单标记完成。网页采集按标题唯一匹配；网页名次变化仍保留原 rank，重复标题不写入。`rankings.web_collected_at` 记录网页尝试时间，同一榜单间隔至少 30 分钟重试；失败不重采手机。
+主命令逐商品执行手机采集、历史标题匹配和卖点提取，全部完成后退出。未确认目标榜单时将 `state` 标为 `unavailable` 并跳过，下次启动重新尝试；失败时标为 `retry_pending`，WDA 通信异常停止本轮。网页获取入口已隐藏。
 
 PostgreSQL 结构定义在 `mobile_schema.sql`。采集使用原生 PostgreSQL 参数和事务，状态更新立即落库；`--check` 使用只读连接，不初始化或迁移表。
 
@@ -474,3 +469,9 @@ PostgreSQL 集成测试使用独立的 `pdd_spider_test_*` 数据库，通过 `P
 卖点表 `ods.t_pdd_selling_point` 按上榜产品记录关联：`ranking_product_id` 外键指向产品，`point_type` 为 `main`（主卖点）、`secondary`（副卖点）或 `pain`（痛点），`content` 保存非空内容；一条卖点一行。`created_at`、`updated_at` 使用 `timestamptz`，插入时默认当前时间，更新时由该表触发器刷新 `updated_at`。手机、网页重采不会清空卖点。
 
 PostgreSQL 驱动通过固定的 `search_path=ods` 设置 schema；`SPIDER_POSTGRES_URL` 使用标准连接串，不附加 `?schema=ods`。连接时区为 `Asia/Shanghai`。采集程序只使用 `ods.t_pdd_*` 表，不执行数据迁移或覆盖已复制记录。
+
+## 商品拼单名额已满
+
+商品页出现可见的“发起拼单名额已满”按钮或文本时，立即跳过该商品，不继续等待商品页就绪或采集 SKU。商品当前已有的完成步骤及数据保留，其余步骤记为 `skipped`，原因记录在分析表。返回榜单后继续下一个商品，不对跳过项执行标题匹配或卖点提取。
+
+跳过结果持久化，重启后不反复打开同一条商品。榜单完成判断允许跳过项；`--check` 的 `Skipped` 列单独统计跳过数量，`Collected` 只统计实际采集完成项。下周新建的商品记录仍会正常尝试采集。
